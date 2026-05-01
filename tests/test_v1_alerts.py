@@ -46,6 +46,8 @@ def _alert(
     expires_offset: timedelta = timedelta(hours=1),
     geometry: dict[str, Any] | None | object = _DEFAULT_POLYGON_SENTINEL,
     event: str = "Severe Thunderstorm Warning",
+    description: str | None = None,
+    instruction: str | None = None,
 ) -> Alert:
     now = datetime.now(UTC)
     if geometry is _DEFAULT_POLYGON_SENTINEL:
@@ -58,6 +60,8 @@ def _alert(
             "id": alert_id,
             "event": event,
             "headline": f"{event} for {alert_id}",
+            "description": description,
+            "instruction": instruction,
             "severity": severity,
             "urgency": Urgency.IMMEDIATE,
             "certainty": Certainty.OBSERVED,
@@ -220,3 +224,133 @@ async def test_503_when_db_state_missing(api_client: AsyncClient) -> None:
         app.state.db = saved
         async with saved.sessionmaker() as session:
             await session.execute(text("SELECT 1"))
+
+
+# --------------------------------------------------------------------------- #
+# bbox filter — list endpoint                                                  #
+# --------------------------------------------------------------------------- #
+
+
+async def test_bbox_filter_returns_overlapping_polygons(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    inside_polygon = _polygon(-95.7, 29.5, -95.0, 30.0)
+    outside_polygon = _polygon(-100.0, 40.0, -99.0, 41.0)
+    await _seed(
+        integration_db,
+        _alert("inside", geometry=inside_polygon),
+        _alert("outside", geometry=outside_polygon),
+    )
+    response = await api_client.get(ROUTE, params={"bbox": "-96.0,29.0,-94.0,31.0"})
+    assert response.status_code == 200
+    ids = [feature["properties"]["id"] for feature in response.json()["features"]]
+    assert ids == ["inside"]
+
+
+async def test_bbox_filter_excludes_alert_with_null_geometry(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    await _seed(
+        integration_db,
+        _alert("nogeom", geometry=None),
+        _alert("withgeom"),
+    )
+    response = await api_client.get(ROUTE, params={"bbox": "-96.0,29.0,-94.0,31.0"})
+    ids = [feature["properties"]["id"] for feature in response.json()["features"]]
+    assert ids == ["withgeom"]
+
+
+async def test_invalid_bbox_returns_400(api_client: AsyncClient) -> None:
+    response = await api_client.get(ROUTE, params={"bbox": "1,2,3"})
+    assert response.status_code == 400
+    assert "bbox" in response.json()["detail"]
+
+
+async def test_point_and_bbox_together_returns_400(api_client: AsyncClient) -> None:
+    response = await api_client.get(
+        ROUTE, params={"point": "29.76,-95.37", "bbox": "-96,29,-94,31"}
+    )
+    assert response.status_code == 400
+    assert "mutually exclusive" in response.json()["detail"]
+
+
+async def test_bbox_combined_with_severity_filter(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    inside = _polygon(-95.7, 29.5, -95.0, 30.0)
+    await _seed(
+        integration_db,
+        _alert("ext-inside", geometry=inside, severity=Severity.EXTREME),
+        _alert("min-inside", geometry=inside, severity=Severity.MINOR),
+        _alert(
+            "ext-outside", geometry=_polygon(-100.0, 40.0, -99.0, 41.0), severity=Severity.EXTREME
+        ),
+    )
+    response = await api_client.get(
+        ROUTE,
+        params={"bbox": "-96.0,29.0,-94.0,31.0", "severity": "Severe"},
+    )
+    ids = {feature["properties"]["id"] for feature in response.json()["features"]}
+    assert ids == {"ext-inside"}
+
+
+# --------------------------------------------------------------------------- #
+# Detail endpoint — /v1/alerts/{id}                                            #
+# --------------------------------------------------------------------------- #
+
+DETAIL_ROUTE_TEMPLATE: str = "/v1/alerts/{alert_id}"
+
+
+async def test_detail_returns_full_alert_including_description(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    await _seed(
+        integration_db,
+        _alert(
+            "with-prose",
+            description="At 745 PM CDT, a severe thunderstorm was located...",
+            instruction="Move to an interior room on the lowest floor.",
+        ),
+    )
+    response = await api_client.get(DETAIL_ROUTE_TEMPLATE.format(alert_id="with-prose"))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "Feature"
+    props = body["properties"]
+    assert props["id"] == "with-prose"
+    assert props["description"].startswith("At 745 PM CDT")
+    assert props["instruction"].startswith("Move to an interior room")
+    # Camel-case aliases preserved at the wire layer.
+    assert props["areaDesc"] == "Test Area"
+
+
+async def test_detail_returns_404_for_unknown_id(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    await _seed(integration_db, _alert("present"))
+    response = await api_client.get(DETAIL_ROUTE_TEMPLATE.format(alert_id="missing"))
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+async def test_detail_returns_alert_with_expired_timestamp(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """Detail shows alerts even after they expire — only the list endpoint
+    filters by activeness."""
+    await _seed(integration_db, _alert("expired", expires_offset=timedelta(hours=-1)))
+    response = await api_client.get(DETAIL_ROUTE_TEMPLATE.format(alert_id="expired"))
+    assert response.status_code == 200
+    assert response.json()["properties"]["id"] == "expired"
+
+
+async def test_detail_handles_urn_style_id_with_colons(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """NWS alert ids are URNs with colons; the route uses ``{id:path}`` so
+    they survive routing intact."""
+    urn_id = "urn:oid:2.49.0.1.840.0.test.001"
+    await _seed(integration_db, _alert(urn_id))
+    response = await api_client.get(DETAIL_ROUTE_TEMPLATE.format(alert_id=urn_id))
+    assert response.status_code == 200
+    assert response.json()["properties"]["id"] == urn_id
