@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
 from aeroza import __version__
+
+pytestmark = pytest.mark.unit
 
 
 async def test_health_returns_ok(client: AsyncClient) -> None:
