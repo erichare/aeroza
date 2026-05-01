@@ -11,10 +11,11 @@ import argparse
 import sys
 from collections.abc import Callable
 
-from aeroza.cli import ingest_alerts
+from aeroza.cli import ingest_alerts, ingest_mrms
 
 SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
     "ingest-alerts": ingest_alerts.main,
+    "ingest-mrms": ingest_mrms.main,
 }
 
 
