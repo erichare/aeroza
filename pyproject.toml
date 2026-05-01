@@ -58,6 +58,9 @@ verify = [
     "pandas>=2.2",
 ]
 
+[project.scripts]
+aeroza-ingest-alerts = "aeroza.cli.ingest_alerts:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
