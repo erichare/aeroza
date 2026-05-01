@@ -50,25 +50,41 @@ _MUTABLE_COLUMNS: tuple[str, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class UpsertResult:
-    """Outcome of a batch upsert."""
+    """Outcome of a batch upsert.
 
-    inserted: int
-    updated: int
+    ``inserted_ids`` contains alert ids that were not previously present;
+    ``updated_ids`` contains ids whose stored row actually changed (no-op
+    updates filtered out by the ``WHERE`` clause are absent from both).
+    """
+
+    inserted_ids: tuple[str, ...]
+    updated_ids: tuple[str, ...]
+
+    @property
+    def inserted(self) -> int:
+        return len(self.inserted_ids)
+
+    @property
+    def updated(self) -> int:
+        return len(self.updated_ids)
 
     @property
     def total(self) -> int:
         return self.inserted + self.updated
 
 
+_EMPTY_RESULT: UpsertResult = UpsertResult(inserted_ids=(), updated_ids=())
+
+
 async def upsert_alerts(session: AsyncSession, alerts: Iterable[Alert]) -> UpsertResult:
-    """Upsert ``alerts`` by id, returning insert/update counts.
+    """Upsert ``alerts`` by id, returning per-row insert/update outcomes.
 
     Empty input is a no-op. The session is **not** committed; callers own the
     transaction boundary (typically via :func:`aeroza.shared.db.session_scope`).
     """
     rows = [_to_row_dict(alert) for alert in alerts]
     if not rows:
-        return UpsertResult(inserted=0, updated=0)
+        return _EMPTY_RESULT
 
     insert_stmt = pg_insert(NwsAlertRow).values(rows)
     update_set: dict[str, Any] = {col: insert_stmt.excluded[col] for col in _MUTABLE_COLUMNS}
@@ -85,9 +101,9 @@ async def upsert_alerts(session: AsyncSession, alerts: Iterable[Alert]) -> Upser
 
     result = await session.execute(upsert_stmt)
     affected_rows = result.all()
-    inserted = sum(1 for row in affected_rows if row.inserted)
-    updated = len(affected_rows) - inserted
-    return UpsertResult(inserted=inserted, updated=updated)
+    inserted_ids = tuple(row.id for row in affected_rows if row.inserted)
+    updated_ids = tuple(row.id for row in affected_rows if not row.inserted)
+    return UpsertResult(inserted_ids=inserted_ids, updated_ids=updated_ids)
 
 
 def _changed_predicate(stmt: Any) -> Any:
