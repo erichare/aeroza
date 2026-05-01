@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.shared.db import Database
+from aeroza.stream.subscriber import AlertSubscriber
 
 
 def get_db(request: Request) -> Database:
@@ -38,3 +39,22 @@ async def get_session(db: DatabaseDep) -> AsyncIterator[AsyncSession]:
     """
     async with db.sessionmaker() as session:
         yield session
+
+
+def get_subscriber(request: Request) -> AlertSubscriber:
+    """Return the app-scoped :class:`AlertSubscriber`.
+
+    Raises 503 when streaming was never wired up — either NATS was
+    unreachable at startup (the lifespan logs a warning and continues
+    without it) or, in tests, the fixture didn't set ``app.state.subscriber``.
+    """
+    subscriber: AlertSubscriber | None = getattr(request.app.state, "subscriber", None)
+    if subscriber is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="streaming not available",
+        )
+    return subscriber
+
+
+SubscriberDep = Annotated[AlertSubscriber, Depends(get_subscriber)]

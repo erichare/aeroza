@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Final
 
 import structlog
@@ -13,6 +13,7 @@ from aeroza import __version__
 from aeroza.config import Settings, get_settings
 from aeroza.query.v1 import router as v1_router
 from aeroza.shared.db import create_engine_and_session
+from aeroza.stream.nats import NatsAlertSubscriber, nats_connection
 
 log = structlog.get_logger(__name__)
 
@@ -25,20 +26,40 @@ API_DESCRIPTION: Final = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open a single Database for the app's lifetime, dispose on shutdown.
+    """Open shared resources for the app's lifetime.
 
-    Tests that drive the ASGI app via ``httpx.ASGITransport`` skip this hook
-    (httpx does not run lifespan by default), so they must set
-    ``app.state.db`` themselves.
+    - ``app.state.db`` is mandatory; failure to open it crashes startup.
+    - ``app.state.subscriber`` is best-effort: if NATS is unreachable, the
+      API still serves DB-backed routes; the streaming endpoint surfaces
+      503. Tests bypass this hook entirely (httpx ASGITransport doesn't run
+      lifespan) and set both attributes on ``app.state`` themselves.
     """
     settings: Settings = get_settings()
-    db = create_engine_and_session(settings.database_url)
-    app.state.db = db
-    log.info("startup", env=settings.env, version=__version__)
-    try:
+    async with AsyncExitStack() as stack:
+        db = create_engine_and_session(settings.database_url)
+        stack.push_async_callback(db.dispose)
+        app.state.db = db
+
+        subscriber: NatsAlertSubscriber | None
+        try:
+            nats_client = await stack.enter_async_context(nats_connection(settings.nats_url))
+            subscriber = NatsAlertSubscriber(nats_client)
+        except Exception as exc:
+            log.warning(
+                "startup.nats_unavailable",
+                url=settings.nats_url,
+                error=str(exc),
+            )
+            subscriber = None
+
+        app.state.subscriber = subscriber
+        log.info(
+            "startup",
+            env=settings.env,
+            version=__version__,
+            streaming=subscriber is not None,
+        )
         yield
-    finally:
-        await db.dispose()
         log.info("shutdown")
 
 
