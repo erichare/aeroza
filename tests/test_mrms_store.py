@@ -42,7 +42,7 @@ async def _truncate_after_each(integration_db: object) -> None:
     yield
     db = integration_db
     async with db.sessionmaker() as session:  # type: ignore[attr-defined]
-        await session.execute(text("TRUNCATE TABLE mrms_files"))
+        await session.execute(text("TRUNCATE TABLE mrms_files CASCADE"))
         await session.commit()
 
 

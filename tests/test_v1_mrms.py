@@ -51,7 +51,7 @@ async def _seed(integration_db: Database, *files: MrmsFile) -> None:
 async def _truncate_after(integration_db: Database) -> object:
     yield
     async with integration_db.sessionmaker() as session:
-        await session.execute(text("TRUNCATE TABLE mrms_files"))
+        await session.execute(text("TRUNCATE TABLE mrms_files CASCADE"))
         await session.commit()
 
 
