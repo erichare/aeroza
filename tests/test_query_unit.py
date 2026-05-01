@@ -6,8 +6,8 @@ import pytest
 from fastapi import HTTPException
 
 from aeroza.ingest.nws_alerts import Severity, severities_at_least, severity_rank
-from aeroza.query.parsers import parse_point
-from aeroza.shared.types import Coordinate
+from aeroza.query.parsers import parse_bbox, parse_point
+from aeroza.shared.types import BoundingBox, Coordinate
 
 
 @pytest.mark.unit
@@ -84,3 +84,42 @@ class TestParsePoint:
             parse_point("0,181")
         assert exc.value.status_code == 400
         assert "longitude" in str(exc.value.detail)
+
+
+@pytest.mark.unit
+class TestParseBbox:
+    def test_returns_none_for_none_input(self) -> None:
+        assert parse_bbox(None) is None
+
+    def test_parses_well_formed_bbox(self) -> None:
+        # GeoJSON ordering: min_lng, min_lat, max_lng, max_lat
+        assert parse_bbox("-95.7,29.5,-95.0,30.0") == BoundingBox(
+            min_lat=29.5, min_lng=-95.7, max_lat=30.0, max_lng=-95.0
+        )
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["", "1,2,3", "1,2,3,4,5", "a,b,c,d"],
+    )
+    def test_rejects_malformed_input(self, raw: str) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_bbox(raw)
+        assert exc.value.status_code == 400
+
+    def test_rejects_inverted_lat(self) -> None:
+        # max_lat (10.0) is less than min_lat (40.0)
+        with pytest.raises(HTTPException) as exc:
+            parse_bbox("-100,40.0,-90,10.0")
+        assert exc.value.status_code == 400
+        assert "min_lat" in str(exc.value.detail)
+
+    def test_rejects_antimeridian_crossing(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_bbox("170,0,-170,10")
+        assert exc.value.status_code == 400
+        assert "antimeridian" in str(exc.value.detail)
+
+    def test_rejects_out_of_range_value(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_bbox("-200,0,-180,10")
+        assert exc.value.status_code == 400
