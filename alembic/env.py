@@ -17,6 +17,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Importing the model modules registers their tables on Base.metadata.
+import aeroza.ingest.mrms_models
 import aeroza.ingest.nws_alerts_models  # noqa: F401  (side-effect import)
 from aeroza.config import get_settings
 from aeroza.shared.base import Base
