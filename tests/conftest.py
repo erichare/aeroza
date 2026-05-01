@@ -83,3 +83,24 @@ async def db_session(integration_db: Database) -> AsyncIterator[AsyncSession]:
             await session.rollback()
             await session.execute(text("TRUNCATE TABLE nws_alerts"))
             await session.commit()
+
+
+@pytest_asyncio.fixture
+async def api_client(integration_db: Database) -> AsyncIterator[AsyncClient]:
+    """ASGI client wired against the test database.
+
+    httpx's ``ASGITransport`` doesn't run the FastAPI lifespan, so we set
+    ``app.state.db`` directly to the integration database. After the test we
+    TRUNCATE ``nws_alerts`` to keep tests isolated without paying for a full
+    drop+recreate between cases.
+    """
+    app = create_app()
+    app.state.db = integration_db
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+    finally:
+        async with integration_db.sessionmaker() as session:
+            await session.execute(text("TRUNCATE TABLE nws_alerts"))
+            await session.commit()
