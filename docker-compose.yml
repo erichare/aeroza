@@ -2,7 +2,12 @@ name: aeroza
 
 services:
   postgres:
+    # postgis/postgis only publishes linux/amd64 manifests on Docker Hub.
+    # Forcing the platform keeps the official image and lets ARM hosts
+    # (Apple Silicon, Linux ARM) run it via the local emulator (Rosetta or
+    # qemu). CI runners are amd64-native, so this is free there.
     image: postgis/postgis:16-3.5
+    platform: linux/amd64
     container_name: aeroza-postgres
     environment:
       POSTGRES_DB: aeroza

@@ -32,6 +32,7 @@ db = [
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.14",
     "geoalchemy2>=0.16",
+    "shapely>=2.0",
 ]
 cache = [
     "redis>=5.2",
@@ -111,13 +112,19 @@ warn_unused_ignores = true
 warn_return_any = true
 no_implicit_optional = true
 
-# Type-stub overrides will be added per-dependency when each module is wired in
-# (pysteps, cfgrib, etc. lack stubs and need ignore_missing_imports = true).
+[[tool.mypy.overrides]]
+module = ["shapely.*", "geoalchemy2.*"]
+ignore_missing_imports = true
+
+# Additional stub-less modules will be added here as each gets wired in
+# (pysteps, cfgrib, etc.).
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 addopts = "-ra --strict-markers --strict-config"
 markers = [
     "unit: pure unit tests with no external dependencies",

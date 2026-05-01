@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: lint · type-check · test
+  unit:
+    name: lint · type-check · unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -40,13 +40,68 @@ jobs:
       - name: Type-check (mypy)
         run: uv run mypy aeroza
 
-      - name: Run tests with coverage
-        run: uv run pytest --cov=aeroza --cov-report=xml --cov-report=term
+      - name: Run unit tests
+        run: uv run pytest -m "not integration" --cov=aeroza --cov-report=xml --cov-report=term
 
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml
+          name: coverage-unit-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  integration:
+    name: integration tests (Postgres+PostGIS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: aeroza
+          POSTGRES_PASSWORD: aeroza
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aeroza -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AEROZA_TEST_DATABASE_URL: postgresql+asyncpg://aeroza:aeroza@localhost:5432/aeroza_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.10.4"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --frozen || uv sync --all-extras
+
+      - name: Create test database
+        run: |
+          PGPASSWORD=aeroza psql -h localhost -U aeroza -d postgres \
+            -c "CREATE DATABASE aeroza_test"
+
+      - name: Run integration tests
+        run: uv run pytest -m integration --cov=aeroza --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration-xml
           path: coverage.xml
           if-no-files-found: ignore
