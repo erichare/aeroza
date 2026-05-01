@@ -46,6 +46,26 @@ aeroza/
 Storage: PostgreSQL 16 + PostGIS, Redis, S3 (Zarr).
 Streaming: NATS JetStream.
 
+## Optional extras
+
+The default `uv sync --all-extras` skips heavy native dependencies. To
+decode MRMS GRIB2 files via [`cfgrib`](aeroza/ingest/mrms_decode.py),
+install the `[grib]` extra and the system `eccodes` library:
+
+```bash
+# macOS
+brew install eccodes
+uv sync --extra grib
+
+# Debian/Ubuntu
+sudo apt-get install -y libeccodes-dev
+uv sync --extra grib
+```
+
+The decode path lazy-loads `cfgrib` so unit tests stay green without
+`eccodes` installed; only the actual end-to-end materialisation needs
+the system library.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
