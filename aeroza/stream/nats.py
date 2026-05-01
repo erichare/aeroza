@@ -3,24 +3,26 @@
 
 Subject taxonomy
 ----------------
-NWS alerts are published to a single subject per provenance:
+- ``aeroza.alerts.nws.new`` — one message per newly-observed NWS alert.
+- ``aeroza.mrms.files.new`` — one message per newly-discovered MRMS object
+  on AWS Open Data.
 
-    aeroza.alerts.nws.new
-
-Future work will add severity / region facets to the subject hierarchy
-(e.g. ``aeroza.alerts.nws.new.us.tx.severe``) so subscribers can filter
-without consuming the full firehose. We keep the surface narrow for v1.
+Future work will add severity / region / product facets so subscribers
+can filter without consuming the full firehose; we keep the surface
+narrow for v1.
 
 Payload
 -------
-Each message body is the alert serialised by ``Alert.model_dump_json()``
-(``by_alias=True``). The pydantic model is the source of truth for the
-wire shape — when fields are added there, subscribers see them
-automatically.
+- Alert messages: ``Alert.model_dump_json(by_alias=True)`` bytes — the
+  pydantic model is the source of truth for the wire shape.
+- MRMS file messages: hand-rolled JSON because :class:`MrmsFile` is a
+  frozen dataclass, not pydantic. Field names are camelCased on the wire
+  to match the alert convention; ``valid_at`` is ISO-8601.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Final, Protocol
@@ -28,11 +30,13 @@ from typing import Any, Final, Protocol
 import structlog
 from pydantic import ValidationError
 
+from aeroza.ingest.mrms import MrmsFile
 from aeroza.ingest.nws_alerts import Alert
 
 log = structlog.get_logger(__name__)
 
 NWS_NEW_ALERT_SUBJECT: Final[str] = "aeroza.alerts.nws.new"
+MRMS_NEW_FILE_SUBJECT: Final[str] = "aeroza.mrms.files.new"
 
 
 class NatsPublisher(Protocol):
@@ -84,6 +88,46 @@ class NatsAlertPublisher:
         payload = alert.model_dump_json(by_alias=True).encode("utf-8")
         await self._client.publish(self._subject, payload)
         log.debug("nats.alerts.publish", subject=self._subject, id=alert.id, bytes=len(payload))
+
+
+class NatsMrmsFilePublisher:
+    """Publishes one NATS message per newly-observed MRMS file."""
+
+    def __init__(
+        self,
+        client: NatsPublisher,
+        *,
+        subject: str = MRMS_NEW_FILE_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def publish_new_file(self, file: MrmsFile) -> None:
+        payload = _encode_mrms_file(file)
+        await self._client.publish(self._subject, payload)
+        log.debug(
+            "nats.mrms.publish",
+            subject=self._subject,
+            key=file.key,
+            bytes=len(payload),
+        )
+
+
+def _encode_mrms_file(file: MrmsFile) -> bytes:
+    return json.dumps(
+        {
+            "key": file.key,
+            "product": file.product,
+            "level": file.level,
+            "validAt": file.valid_at.isoformat(),
+            "sizeBytes": file.size_bytes,
+            "etag": file.etag,
+        }
+    ).encode("utf-8")
 
 
 class NatsAlertSubscriber:
