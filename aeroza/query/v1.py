@@ -9,6 +9,8 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   NATS subject.
 - ``GET /v1/alerts/{alert_id}`` — single-alert detail with the long-form
   ``description`` and ``instruction`` fields that the list endpoint omits.
+- ``GET /v1/mrms/files`` — MRMS catalog ("what data is available right
+  now") populated by the ``aeroza-ingest-mrms`` worker.
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
@@ -18,6 +20,7 @@ matcher.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated
 
 import structlog
@@ -26,8 +29,28 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.ingest.nws_alerts import Severity
-from aeroza.query.alerts import DEFAULT_LIMIT, MAX_LIMIT, find_active_alerts, find_alert_by_id
+from aeroza.query.alerts import (
+    DEFAULT_LIMIT as ALERTS_DEFAULT_LIMIT,
+)
+from aeroza.query.alerts import (
+    MAX_LIMIT as ALERTS_MAX_LIMIT,
+)
+from aeroza.query.alerts import (
+    find_active_alerts,
+    find_alert_by_id,
+)
 from aeroza.query.dependencies import SubscriberDep, get_session
+from aeroza.query.mrms import (
+    DEFAULT_LIMIT as MRMS_DEFAULT_LIMIT,
+)
+from aeroza.query.mrms import (
+    MAX_LIMIT as MRMS_MAX_LIMIT,
+)
+from aeroza.query.mrms import (
+    MrmsFileList,
+    find_mrms_files,
+    mrms_view_to_item,
+)
 from aeroza.query.parsers import parse_bbox, parse_point
 from aeroza.query.schemas import (
     AlertDetailFeature,
@@ -84,8 +107,12 @@ async def list_alerts(
     ] = None,
     limit: Annotated[
         int,
-        Query(ge=1, le=MAX_LIMIT, description=f"Max results to return (default {DEFAULT_LIMIT})"),
-    ] = DEFAULT_LIMIT,
+        Query(
+            ge=1,
+            le=ALERTS_MAX_LIMIT,
+            description=f"Max results to return (default {ALERTS_DEFAULT_LIMIT})",
+        ),
+    ] = ALERTS_DEFAULT_LIMIT,
 ) -> AlertFeatureCollection:
     if point is not None and bbox is not None:
         raise HTTPException(
@@ -174,3 +201,61 @@ async def _alert_event_stream(subscriber: SubscriberDep) -> AsyncIterator[bytes]
     except Exception as exc:
         log.exception("stream.alerts.terminated", error=str(exc))
         raise
+
+
+@router.get(
+    "/mrms/files",
+    response_model=MrmsFileList,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["mrms"],
+    summary="List MRMS files in the catalog",
+    description=(
+        "Returns the most-recent rows of the MRMS file catalog populated by "
+        "the ``aeroza-ingest-mrms`` worker. Filter by ``product`` (e.g. "
+        "``MergedReflectivityComposite``), ``level`` (e.g. ``00.50``), and a "
+        "half-open ``[since, until)`` window on ``valid_at``. Results are "
+        "ordered by ``valid_at`` descending (most recent first)."
+    ),
+)
+async def list_mrms_files_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    product: Annotated[
+        str | None,
+        Query(description="Filter to a single product (e.g. 'MergedReflectivityComposite')"),
+    ] = None,
+    level: Annotated[
+        str | None,
+        Query(description="Filter to a single product level (e.g. '00.50')"),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(description="Inclusive lower bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(description="Exclusive upper bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=MRMS_MAX_LIMIT,
+            description=f"Max results to return (default {MRMS_DEFAULT_LIMIT})",
+        ),
+    ] = MRMS_DEFAULT_LIMIT,
+) -> MrmsFileList:
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="since must be strictly before until",
+        )
+    views = await find_mrms_files(
+        session,
+        product=product,
+        level=level,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    return MrmsFileList(items=[mrms_view_to_item(v) for v in views])
