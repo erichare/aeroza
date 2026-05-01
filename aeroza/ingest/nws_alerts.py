@@ -35,6 +35,31 @@ class Severity(StrEnum):
     UNKNOWN = "Unknown"
 
 
+_SEVERITY_RANK: dict[str, int] = {
+    Severity.EXTREME.value: 4,
+    Severity.SEVERE.value: 3,
+    Severity.MODERATE.value: 2,
+    Severity.MINOR.value: 1,
+    Severity.UNKNOWN.value: 0,
+}
+
+
+def severity_rank(severity: Severity | str) -> int:
+    """Return the integer rank of ``severity`` (Extreme=4 … Unknown=0)."""
+    key = severity.value if isinstance(severity, Severity) else severity
+    return _SEVERITY_RANK.get(key, 0)
+
+
+def severities_at_least(threshold: Severity) -> tuple[str, ...]:
+    """Return the severity strings whose rank is ``>=`` ``threshold``'s rank.
+
+    Useful for ``WHERE severity IN (...)`` filters where the column is stored
+    as plain text rather than a ranked enum.
+    """
+    threshold_rank = severity_rank(threshold)
+    return tuple(name for name, rank in _SEVERITY_RANK.items() if rank >= threshold_rank)
+
+
 class Urgency(StrEnum):
     IMMEDIATE = "Immediate"
     EXPECTED = "Expected"
