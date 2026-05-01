@@ -116,7 +116,7 @@ warn_return_any = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["shapely.*", "geoalchemy2.*"]
+module = ["shapely.*", "geoalchemy2.*", "boto3", "boto3.*", "botocore", "botocore.*"]
 ignore_missing_imports = true
 
 # Additional stub-less modules will be added here as each gets wired in
