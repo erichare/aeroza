@@ -54,7 +54,12 @@ class Certainty(StrEnum):
 class Alert(BaseModel):
     """An active NWS alert, normalised for downstream consumption."""
 
-    model_config = ConfigDict(frozen=True, str_strip_whitespace=True, extra="ignore")
+    model_config = ConfigDict(
+        frozen=True,
+        str_strip_whitespace=True,
+        extra="ignore",
+        populate_by_name=True,  # accept both API aliases (areaDesc) and field names (area_desc)
+    )
 
     id: str
     event: str
