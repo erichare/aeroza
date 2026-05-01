@@ -15,7 +15,7 @@ from aeroza.ingest.nws_alerts import Alert
 from aeroza.stream.nats import (
     NWS_NEW_ALERT_SUBJECT,
     NatsAlertPublisher,
-    NatsClient,
+    NatsPublisher,
 )
 
 pytestmark = pytest.mark.unit
@@ -99,5 +99,5 @@ async def test_each_call_emits_one_message() -> None:
 
 
 def test_stub_satisfies_protocol() -> None:
-    publisher: NatsClient = StubNatsClient()
+    publisher: NatsPublisher = StubNatsClient()
     assert hasattr(publisher, "publish")

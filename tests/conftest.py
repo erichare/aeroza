@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.main import create_app
 from aeroza.shared.db import Database, create_engine_and_session
+from aeroza.stream.subscriber import InMemoryAlertSubscriber
 from alembic import command
 
 INTEGRATION_DB_ENV: str = "AEROZA_TEST_DATABASE_URL"
@@ -86,16 +87,28 @@ async def db_session(integration_db: Database) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture
-async def api_client(integration_db: Database) -> AsyncIterator[AsyncClient]:
-    """ASGI client wired against the test database.
+async def alert_subscriber() -> AsyncIterator[InMemoryAlertSubscriber]:
+    """In-memory ``AlertSubscriber`` used by SSE-route tests."""
+    subscriber = InMemoryAlertSubscriber()
+    yield subscriber
+    await subscriber.close()
+
+
+@pytest_asyncio.fixture
+async def api_client(
+    integration_db: Database,
+    alert_subscriber: InMemoryAlertSubscriber,
+) -> AsyncIterator[AsyncClient]:
+    """ASGI client wired against the test database and an in-memory subscriber.
 
     httpx's ``ASGITransport`` doesn't run the FastAPI lifespan, so we set
-    ``app.state.db`` directly to the integration database. After the test we
+    ``app.state.db`` and ``app.state.subscriber`` directly. After the test we
     TRUNCATE ``nws_alerts`` to keep tests isolated without paying for a full
     drop+recreate between cases.
     """
     app = create_app()
     app.state.db = integration_db
+    app.state.subscriber = alert_subscriber
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
