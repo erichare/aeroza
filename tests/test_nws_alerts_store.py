@@ -58,6 +58,8 @@ async def test_inserts_new_alert(db_session: AsyncSession) -> None:
     result = await upsert_alerts(db_session, [_alert()])
     await db_session.commit()
 
+    assert result.inserted_ids == ("urn:test:alert:001",)
+    assert result.updated_ids == ()
     assert result.inserted == 1
     assert result.updated == 0
 
@@ -74,20 +76,20 @@ async def test_inserts_new_alert(db_session: AsyncSession) -> None:
 
 async def test_empty_input_is_noop(db_session: AsyncSession) -> None:
     result = await upsert_alerts(db_session, [])
-    assert result.inserted == 0
-    assert result.updated == 0
+    assert result.inserted_ids == ()
+    assert result.updated_ids == ()
     assert result.total == 0
 
 
 async def test_updates_existing_alert_on_conflict(db_session: AsyncSession) -> None:
     first = await upsert_alerts(db_session, [_alert(headline="initial")])
     await db_session.commit()
-    assert first.inserted == 1
+    assert first.inserted_ids == ("urn:test:alert:001",)
 
     second = await upsert_alerts(db_session, [_alert(headline="revised")])
     await db_session.commit()
-    assert second.inserted == 0
-    assert second.updated == 1
+    assert second.inserted_ids == ()
+    assert second.updated_ids == ("urn:test:alert:001",)
 
     row = (await db_session.execute(select(NwsAlertRow))).scalar_one()
     assert row.headline == "revised"
@@ -105,8 +107,8 @@ async def test_no_op_update_skipped_via_where_clause(db_session: AsyncSession) -
     second = await upsert_alerts(db_session, [alert])
     await db_session.commit()
 
-    assert second.inserted == 0
-    assert second.updated == 0  # unchanged row was filtered out by WHERE
+    assert second.inserted_ids == ()
+    assert second.updated_ids == ()  # unchanged row was filtered out by WHERE
 
     refreshed = (
         await db_session.execute(select(NwsAlertRow).where(NwsAlertRow.id == alert.id))
@@ -127,8 +129,8 @@ async def test_mixed_insert_and_update_in_one_call(db_session: AsyncSession) -> 
     )
     await db_session.commit()
 
-    assert result.inserted == 1
-    assert result.updated == 1
+    assert result.inserted_ids == ("b",)
+    assert result.updated_ids == ("a",)
     assert result.total == 2
 
 
@@ -148,6 +150,6 @@ async def test_alert_without_geometry_persists_with_null(db_session: AsyncSessio
     result = await upsert_alerts(db_session, [_alert(alert_id="no-geom", geometry=None)])
     await db_session.commit()
 
-    assert result.inserted == 1
+    assert result.inserted_ids == ("no-geom",)
     row = (await db_session.execute(select(NwsAlertRow))).scalar_one()
     assert row.geometry is None
