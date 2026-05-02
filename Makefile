@@ -58,10 +58,13 @@ lint: ## Run ruff lint
 format: ## Run ruff formatter
 	$(UV) run ruff format .
 
+format-check: ## Verify formatter is a no-op (CI parity)
+	$(UV) run ruff format --check .
+
 typecheck: ## Run mypy
 	$(UV) run mypy aeroza
 
-check: lint typecheck test ## Run lint, type-check, and unit tests
+check: lint format-check typecheck test ## Run lint, format-check, type-check, and unit tests
 
 migrate: ## Apply all pending migrations to the dev database
 	$(UV) run alembic upgrade head

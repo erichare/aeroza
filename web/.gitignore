@@ -1,6 +1,19 @@
+# Next.js
+/.next/
+/out/
+/build/
+
+# Node
 node_modules/
-.next/
-out/
-.env*.local
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Misc
+.DS_Store
+
+# TypeScript build info
 *.tsbuildinfo
 next-env.d.ts
