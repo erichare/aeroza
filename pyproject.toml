@@ -56,6 +56,9 @@ nowcast = [
     "pysteps>=1.10",
     "scipy>=1.14",
     "scikit-image>=0.24",
+    # pysteps' Lucas-Kanade flow uses cv2.morphologyEx — without opencv
+    # the call site raises MissingOptionalDependency.
+    "opencv-python-headless>=4.10",
 ]
 grib = [
     "cfgrib>=0.9",
