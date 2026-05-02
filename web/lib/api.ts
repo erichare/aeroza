@@ -18,10 +18,14 @@ import {
   AeroaClient,
   type AlertFeatureCollection,
   type AlertQuery,
+  type AlertRuleList,
+  type AlertRuleQuery,
   type CalibrationQuery,
   type CalibrationResponse,
   type CalibrationSeriesQuery,
   type CalibrationSeriesResponse,
+  type WebhookSubscriptionList,
+  type WebhookSubscriptionQuery,
   type Health,
   type MrmsFileList,
   type MrmsGridList,
@@ -48,6 +52,10 @@ export type {
   AlertFeature,
   AlertFeatureCollection,
   AlertProperties,
+  AlertRule,
+  AlertRuleList,
+  AlertRuleQuery,
+  AlertRuleStatus,
   CalibrationItem,
   CalibrationQuery,
   CalibrationResponse,
@@ -55,6 +63,17 @@ export type {
   CalibrationSeriesPoint,
   CalibrationSeriesQuery,
   CalibrationSeriesResponse,
+  PointRuleConfig,
+  PolygonRuleConfig,
+  Predicate,
+  PredicateOp,
+  RuleConfig,
+  RuleConfigPolygonReducer,
+  WebhookStatus,
+  WebhookSubscription,
+  WebhookSubscriptionList,
+  WebhookSubscriptionQuery,
+  WebhookSubscriptionRedacted,
   GeoJsonGeometry,
   Health,
   MrmsFileItem,
@@ -124,6 +143,16 @@ export function fetchCalibrationSeries(
   query: CalibrationSeriesQuery = {},
 ): Promise<CalibrationSeriesResponse> {
   return client.getCalibrationSeries(query);
+}
+
+export function fetchWebhooks(
+  query: WebhookSubscriptionQuery = {},
+): Promise<WebhookSubscriptionList> {
+  return client.listWebhooks(query);
+}
+
+export function fetchAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {
+  return client.listAlertRules(query);
 }
 
 /**

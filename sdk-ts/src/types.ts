@@ -225,6 +225,108 @@ export interface CalibrationSeriesQuery {
 }
 
 // ---------------------------------------------------------------------------
+// Webhooks
+//
+// The list endpoint returns secret-redacted shapes; the create response
+// returns the full shape with `secret` set once. Patches are partial.
+
+export type WebhookStatus = "active" | "paused" | "disabled";
+
+/** List/get response — no `secret`. */
+export interface WebhookSubscriptionRedacted {
+  type: "WebhookSubscriptionRedacted";
+  id: string;
+  url: string;
+  events: string[];
+  description: string | null;
+  status: WebhookStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Create response — includes the freshly-minted signing secret. */
+export interface WebhookSubscription {
+  type: "WebhookSubscription";
+  id: string;
+  url: string;
+  events: string[];
+  description: string | null;
+  status: WebhookStatus;
+  /** Shown once at creation; subsequent reads omit this. */
+  secret: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebhookSubscriptionList {
+  type: "WebhookSubscriptionList";
+  items: WebhookSubscriptionRedacted[];
+}
+
+export interface WebhookSubscriptionQuery {
+  status?: WebhookStatus;
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Alert rules (webhook predicate DSL)
+
+export type AlertRuleStatus = "active" | "paused" | "disabled";
+export type PredicateOp = ">" | ">=" | "<" | "<=" | "==" | "!=";
+export type RuleConfigPolygonReducer = "max" | "mean" | "min" | "count_ge";
+
+export interface Predicate {
+  op: PredicateOp;
+  threshold: number;
+}
+
+export interface PointRuleConfig {
+  type: "point";
+  product: string;
+  level: string;
+  predicate: Predicate;
+  lat: number;
+  lng: number;
+}
+
+export interface PolygonRuleConfig {
+  type: "polygon";
+  product: string;
+  level: string;
+  predicate: Predicate;
+  /** Flat `lng,lat,lng,lat,…` (≥3 vertices, ring implicitly closed). */
+  polygon: string;
+  reducer: RuleConfigPolygonReducer;
+  countThreshold?: number | null;
+}
+
+export type RuleConfig = PointRuleConfig | PolygonRuleConfig;
+
+export interface AlertRule {
+  type: "AlertRule";
+  id: string;
+  subscriptionId: string;
+  name: string;
+  description: string | null;
+  status: AlertRuleStatus;
+  config: RuleConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlertRuleList {
+  type: "AlertRuleList";
+  items: AlertRule[];
+}
+
+export interface AlertRuleQuery {
+  status?: AlertRuleStatus;
+  /** Filter to rules bound to this webhook subscription. */
+  subscriptionId?: string;
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Query parameters
 
 export interface AlertQuery {

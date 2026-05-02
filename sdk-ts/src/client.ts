@@ -18,10 +18,14 @@ import type {
   AlertDetailFeature,
   AlertFeatureCollection,
   AlertQuery,
+  AlertRuleList,
+  AlertRuleQuery,
   CalibrationQuery,
   CalibrationResponse,
   CalibrationSeriesQuery,
   CalibrationSeriesResponse,
+  WebhookSubscriptionList,
+  WebhookSubscriptionQuery,
   Health,
   MrmsFileList,
   MrmsGridItem,
@@ -215,6 +219,33 @@ export class AeroaClient {
     return this.getJson<CalibrationSeriesResponse>(
       this.withQuery("/v1/calibration/series", params),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Webhooks (read-only at the moment — full CRUD lives on the server but
+  // the SDK surface only covers list for now; create/update/delete arrive
+  // alongside the dashboard editor).
+
+  async listWebhooks(
+    query: WebhookSubscriptionQuery = {},
+  ): Promise<WebhookSubscriptionList> {
+    const params = new URLSearchParams();
+    if (query.status) params.set("status", query.status);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    return this.getJson<WebhookSubscriptionList>(
+      this.withQuery("/v1/webhooks", params),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Alert rules
+
+  async listAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {
+    const params = new URLSearchParams();
+    if (query.status) params.set("status", query.status);
+    if (query.subscriptionId) params.set("subscriptionId", query.subscriptionId);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    return this.getJson<AlertRuleList>(this.withQuery("/v1/alert-rules", params));
   }
 
   // -------------------------------------------------------------------------
