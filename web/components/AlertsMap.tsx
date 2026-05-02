@@ -16,6 +16,7 @@ import {
   type Severity,
   fetchAlerts,
 } from "@/lib/api";
+import { loadUsStateBoundaries } from "@/lib/usStates";
 
 import { SeverityBadge } from "./SeverityBadge";
 import { StatusDot } from "./StatusDot";
@@ -28,6 +29,14 @@ const RADAR_SOURCE_ID = "mrms-radar";
 const RADAR_LAYER_ID = "mrms-radar";
 // Insert radar layer just below the alert polygons so alerts stay on top
 // (severity polygons are the primary signal; radar is the backdrop).
+
+const STATES_SOURCE_ID = "us-states";
+const STATES_LINE_LAYER_ID = "us-states-line";
+// State borders sit above radar so the line is always visible, but below
+// alerts so a severe-storm polygon still wins for hit-testing. The line
+// colour is a desaturated charcoal that reads on both the cream basemap
+// and through translucent radar without competing with the alert palette.
+const STATE_BORDER_COLOR = "#3a2f24";
 
 const REFRESH_INTERVAL_MS = 30_000;
 // Bust the radar tile cache once per minute so the layer trends fresh as
@@ -192,10 +201,66 @@ export function AlertsMap({
         source: RADAR_SOURCE_ID,
         layout: { visibility: showRadar ? "visible" : "none" },
         paint: {
-          "raster-opacity": 0.85,
-          "raster-resampling": "nearest",
+          // Slightly more transparent than before so the new state-border
+          // layer reads through light precip without losing the storm's
+          // signal in the dense core.
+          "raster-opacity": 0.78,
+          // Linear instead of nearest at the GL stage smooths the
+          // remaining cell→pixel boundaries the server bilinear sampler
+          // doesn't reach (e.g. when MapLibre is upscaling between zoom
+          // levels mid-pinch).
+          "raster-resampling": "linear",
+          "raster-fade-duration": 200,
         },
       });
+
+      // US state boundaries — fetched once, shared across map instances
+      // via the in-module promise cache. We add the source and layer
+      // immediately with an empty FeatureCollection placeholder, then
+      // swap in the real data when the fetch resolves. That avoids a
+      // race between map.addLayer() and a slow asset response on a cold
+      // CDN.
+      map.addSource(STATES_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: STATES_LINE_LAYER_ID,
+        type: "line",
+        source: STATES_SOURCE_ID,
+        paint: {
+          "line-color": STATE_BORDER_COLOR,
+          // Width grows gently with zoom — too thick at z=4 covers
+          // small states; too thin at z=8 disappears against echoes.
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            3, 0.45,
+            5, 0.8,
+            8, 1.2,
+            10, 1.6,
+          ],
+          "line-opacity": 0.55,
+        },
+      });
+      void loadUsStateBoundaries()
+        .then((collection) => {
+          const source = map.getSource(STATES_SOURCE_ID) as
+            | GeoJSONSource
+            | undefined;
+          if (!source) return;
+          source.setData(
+            collection as unknown as FeatureCollection<Geometry, GeoJsonProperties>,
+          );
+        })
+        .catch((err: unknown) => {
+          // A missing/bad state-borders file shouldn't break the map —
+          // log to the console for debugging and continue without
+          // borders. The radar + alerts layers carry the rest of the UX.
+          // eslint-disable-next-line no-console
+          console.warn("us-states.load_failed", err);
+        });
 
       map.addSource(SOURCE_ID, {
         type: "geojson",
@@ -385,7 +450,7 @@ export function AlertsMap({
         ref={containerRef}
         style={{ width: "100%", height: "100%" }}
       />
-      <Legend />
+      <Legend showRadar={showRadar} />
       {error ? (
         <div className="absolute bottom-3 left-3 rounded-md border border-warning/40 bg-bg/85 px-3 py-2 text-xs text-warning shadow-lg backdrop-blur">
           <StatusDot tone="warning" label={error} />
@@ -401,23 +466,68 @@ export function AlertsMap({
   );
 }
 
-function Legend() {
+// Pinned to the same dBZ stops as `aeroza/tiles/colormap.py` so the on-map
+// legend tells the truth about what the user is looking at. Two stops
+// per row keeps the strip readable at 12rem wide.
+const DBZ_LEGEND_STOPS: ReadonlyArray<{ dbz: number; color: string }> = [
+  { dbz: 5, color: "#04e9e7" },
+  { dbz: 15, color: "#0300f4" },
+  { dbz: 25, color: "#01c501" },
+  { dbz: 35, color: "#fdf802" },
+  { dbz: 45, color: "#fd9500" },
+  { dbz: 55, color: "#d40000" },
+  { dbz: 65, color: "#f800fd" },
+];
+
+function Legend({ showRadar }: { showRadar: boolean }) {
   return (
-    <div className="absolute bottom-3 right-3 z-10 rounded-lg border border-border/60 bg-bg/85 px-3 py-2 text-[11px] shadow-lg backdrop-blur">
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted">
-        Severity
+    <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-2 rounded-lg border border-border/60 bg-bg/85 px-3 py-2 text-[11px] shadow-lg backdrop-blur">
+      <div>
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted">
+          Severity
+        </div>
+        <ul className="flex flex-col gap-1">
+          {SEVERITY_ORDER.map((s) => (
+            <li key={s} className="flex items-center gap-2 text-text">
+              <span
+                className="inline-block h-2.5 w-3.5 rounded-sm"
+                style={{ background: SEVERITY_FILL_COLOR[s], opacity: 0.55 }}
+              />
+              <span>{s}</span>
+            </li>
+          ))}
+        </ul>
       </div>
-      <ul className="flex flex-col gap-1">
-        {SEVERITY_ORDER.map((s) => (
-          <li key={s} className="flex items-center gap-2 text-text">
-            <span
-              className="inline-block h-2.5 w-3.5 rounded-sm"
-              style={{ background: SEVERITY_FILL_COLOR[s], opacity: 0.55 }}
-            />
-            <span>{s}</span>
-          </li>
-        ))}
-      </ul>
+      {showRadar ? <DbzRampLegend /> : null}
+    </div>
+  );
+}
+
+function DbzRampLegend() {
+  // CSS gradient mirrors the discrete stops used by the server-side
+  // colormap. Linear-RGB blending here matches the renderer's behaviour
+  // closely enough for a legend; the on-map echoes are the source of
+  // truth for visible colour.
+  const gradient = `linear-gradient(to right, ${DBZ_LEGEND_STOPS.map(
+    (s, i) =>
+      `${s.color} ${(i / (DBZ_LEGEND_STOPS.length - 1)) * 100}%`,
+  ).join(", ")})`;
+  return (
+    <div className="border-t border-border/40 pt-2">
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted">
+        Reflectivity (dBZ)
+      </div>
+      <div
+        className="h-2 w-44 rounded-sm"
+        style={{ background: gradient, opacity: 0.85 }}
+        aria-hidden
+      />
+      <div className="mt-1 flex justify-between font-mono text-[9px] text-muted">
+        <span>5</span>
+        <span>25</span>
+        <span>45</span>
+        <span>65+</span>
+      </div>
     </div>
   );
 }

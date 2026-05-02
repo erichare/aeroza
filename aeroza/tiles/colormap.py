@@ -40,6 +40,16 @@ DBZ_STOPS: Final[tuple[tuple[float, int, int, int], ...]] = (
 # transparent regardless.
 TRANSPARENT_BELOW_DBZ: Final[float] = 5.0
 
+# Faint reflectivity ramps its opacity linearly between ``TRANSPARENT_BELOW_DBZ``
+# (alpha=ALPHA_MIN) and ``ALPHA_FULL_DBZ`` (alpha=ALPHA_MAX). Above
+# ``ALPHA_FULL_DBZ`` the opacity is constant. This gives the storm a
+# soft outer edge rather than the hard cliff a constant alpha leaves at
+# the threshold — and lets the basemap (now with state borders!) read
+# through light precip.
+ALPHA_FULL_DBZ: Final[float] = 25.0
+ALPHA_MIN: Final[int] = 90
+ALPHA_MAX: Final[int] = 215
+
 
 def reflectivity_to_rgba(values: np.ndarray) -> np.ndarray:
     """Map a 2D dBZ array to an ``(H, W, 4)`` uint8 RGBA tile.
@@ -91,7 +101,14 @@ def reflectivity_to_rgba(values: np.ndarray) -> np.ndarray:
     flat = rgba.reshape(-1, 4)
     visible_flat = visible.reshape(-1)
     flat[visible_flat, 0:3] = interp_u8
-    flat[visible_flat, 3] = 220  # ~86% opaque so basemap landmarks bleed through
+    # Faint cells (just above the transparent threshold) ramp their alpha
+    # in linearly so the storm has a soft outer edge instead of a hard
+    # cliff at 5 dBZ. Above ALPHA_FULL_DBZ the opacity is constant.
+    fade_lo = TRANSPARENT_BELOW_DBZ
+    fade_hi = ALPHA_FULL_DBZ
+    fade_t = np.clip((v - fade_lo) / max(fade_hi - fade_lo, 1e-9), 0.0, 1.0)
+    alpha = (ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * fade_t).astype(np.uint8)
+    flat[visible_flat, 3] = alpha
     return rgba
 
 

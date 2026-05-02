@@ -25,10 +25,18 @@ from aeroza.tiles.colormap import reflectivity_to_rgba
 from aeroza.tiles.web_mercator import (
     TILE_SIZE,
     TileBounds,
+    latlng_to_bilinear_indices,
     latlng_to_pixel_indices,
     pixel_lonlat_grid,
     tile_bounds,
 )
+
+# Switch to bilinear sampling at this zoom and above. Below it, each tile
+# pixel covers many native MRMS cells and nearest-neighbor produces an
+# identical-looking but cheaper result. Above it, tile pixels span the
+# space between cells, and bilinear gives the soft edges users expect
+# from a modern radar viewer.
+BILINEAR_MIN_ZOOM: int = 4
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import xarray as xr
@@ -55,6 +63,7 @@ def render_tile_png(
         variable=variable,
         bounds=bounds,
         tile_size=tile_size,
+        zoom=z,
     )
     return _encode_png(rgba)
 
@@ -65,6 +74,7 @@ def _render_rgba(
     variable: str,
     bounds: TileBounds,
     tile_size: int,
+    zoom: int,
 ) -> np.ndarray:
     """Sample the grid into a tile-shaped RGBA array."""
     import xarray as xr
@@ -74,13 +84,24 @@ def _render_rgba(
         if variable not in ds.variables:
             raise KeyError(f"variable {variable!r} not in store {zarr_uri}")
         da = ds[variable].load()
-        return _sample_into_tile(da, bounds=bounds, tile_size=tile_size)
+        return _sample_into_tile(da, bounds=bounds, tile_size=tile_size, zoom=zoom)
     finally:
         ds.close()
 
 
-def _sample_into_tile(da: xr.DataArray, *, bounds: TileBounds, tile_size: int) -> np.ndarray:
-    """Project the grid into the tile's pixel grid via nearest neighbor."""
+def _sample_into_tile(
+    da: xr.DataArray,
+    *,
+    bounds: TileBounds,
+    tile_size: int,
+    zoom: int,
+) -> np.ndarray:
+    """Project the grid into the tile's pixel grid.
+
+    Uses nearest-neighbor at coarse zoom (where each pixel already covers
+    many native cells) and bilinear at finer zoom (where pixels fall
+    between cells and bilinear gives smooth, modern-looking edges).
+    """
     grid_lats = np.asarray(da["latitude"].values, dtype=np.float64)
     grid_lngs = np.asarray(da["longitude"].values, dtype=np.float64)
     values = np.asarray(da.values, dtype=np.float32)
@@ -105,15 +126,71 @@ def _sample_into_tile(da: xr.DataArray, *, bounds: TileBounds, tile_size: int) -
     # Translate request longitudes into the grid's convention.
     lng_grid = _to_grid_longitude(lng_grid, grid_lngs)
 
-    rows, cols, in_bounds = latlng_to_pixel_indices(
-        lats=lat_grid,
-        lngs=lng_grid,
+    if zoom >= BILINEAR_MIN_ZOOM:
+        sampled = _bilinear_sample(
+            values=values,
+            grid_lats=grid_lats,
+            grid_lngs=grid_lngs,
+            lats=lat_grid,
+            lngs=lng_grid,
+        )
+    else:
+        rows, cols, in_bounds = latlng_to_pixel_indices(
+            lats=lat_grid,
+            lngs=lng_grid,
+            grid_lats=grid_lats,
+            grid_lngs=grid_lngs,
+        )
+        sampled = values[rows, cols].astype(np.float32)
+        sampled = np.where(in_bounds, sampled, np.nan)
+    return reflectivity_to_rgba(sampled)
+
+
+def _bilinear_sample(
+    *,
+    values: np.ndarray,
+    grid_lats: np.ndarray,
+    grid_lngs: np.ndarray,
+    lats: np.ndarray,
+    lngs: np.ndarray,
+) -> np.ndarray:
+    """Bilinear sample of ``values`` at each (lat, lng) tile pixel.
+
+    NaN propagates: any of the four corners being NaN makes the
+    interpolated cell NaN, which the colormap renders transparent. That
+    is the right behaviour for a pixel sitting on the edge of a missing
+    region — we'd rather show a hole than a confidently wrong colour.
+    """
+    row_lo, row_hi, col_lo, col_hi, w_row, w_col, in_bounds = latlng_to_bilinear_indices(
+        lats=lats,
+        lngs=lngs,
         grid_lats=grid_lats,
         grid_lngs=grid_lngs,
     )
-    sampled = values[rows, cols].astype(np.float32)
-    sampled = np.where(in_bounds, sampled, np.nan)
-    return reflectivity_to_rgba(sampled)
+
+    v00 = values[row_lo, col_lo].astype(np.float32)
+    v01 = values[row_lo, col_hi].astype(np.float32)
+    v10 = values[row_hi, col_lo].astype(np.float32)
+    v11 = values[row_hi, col_hi].astype(np.float32)
+
+    one_minus_w_row = (1.0 - w_row).astype(np.float32)
+    one_minus_w_col = (1.0 - w_col).astype(np.float32)
+    w_row_f32 = w_row.astype(np.float32)
+    w_col_f32 = w_col.astype(np.float32)
+
+    # NaN-safe weighted blend. Any NaN in v** poisons the corresponding
+    # weighted product; the np.where below masks the result back to NaN
+    # rather than letting the float arithmetic silently zero it out.
+    sampled = (
+        v00 * one_minus_w_row * one_minus_w_col
+        + v01 * one_minus_w_row * w_col_f32
+        + v10 * w_row_f32 * one_minus_w_col
+        + v11 * w_row_f32 * w_col_f32
+    )
+    has_nan = np.isnan(v00) | np.isnan(v01) | np.isnan(v10) | np.isnan(v11)
+    sampled = np.where(has_nan, np.float32(np.nan), sampled)
+    sampled = np.where(in_bounds, sampled, np.float32(np.nan))
+    return sampled
 
 
 def _to_grid_longitude(lngs: np.ndarray, grid_lngs: np.ndarray) -> np.ndarray:
