@@ -154,6 +154,39 @@ export interface Stats {
 }
 
 // ---------------------------------------------------------------------------
+// Calibration
+
+/**
+ * One row of the calibration aggregate. Per (algorithm × forecast horizon)
+ * over the requested window. Sample-weighted means: a verification with
+ * N=1M cells contributes N times to maeMean / biasMean / rmseMean.
+ */
+export interface CalibrationItem {
+  algorithm: string;
+  forecastHorizonMinutes: number;
+  verificationCount: number;
+  sampleCount: number;
+  maeMean: number;
+  biasMean: number;
+  rmseMean: number;
+}
+
+export interface CalibrationResponse {
+  type: "Calibration";
+  generatedAt: string;
+  windowHours: number;
+  items: CalibrationItem[];
+}
+
+export interface CalibrationQuery {
+  /** Default: 24. Server clamps to ≤ 720 (30 days). */
+  windowHours?: number;
+  algorithm?: string;
+  product?: string;
+  level?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Query parameters
 
 export interface AlertQuery {

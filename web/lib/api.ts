@@ -18,6 +18,8 @@ import {
   AeroaClient,
   type AlertFeatureCollection,
   type AlertQuery,
+  type CalibrationQuery,
+  type CalibrationResponse,
   type Health,
   type MrmsFileList,
   type MrmsGridList,
@@ -44,6 +46,9 @@ export type {
   AlertFeature,
   AlertFeatureCollection,
   AlertProperties,
+  CalibrationItem,
+  CalibrationQuery,
+  CalibrationResponse,
   GeoJsonGeometry,
   Health,
   MrmsFileItem,
@@ -101,6 +106,12 @@ export function fetchMrmsPolygon(
   query: SdkPolygonQuery,
 ): Promise<SdkMrmsGridPolygonSample> {
   return client.reduceGridOverPolygon(query);
+}
+
+export function fetchCalibration(
+  query: CalibrationQuery = {},
+): Promise<CalibrationResponse> {
+  return client.getCalibration(query);
 }
 
 /**
