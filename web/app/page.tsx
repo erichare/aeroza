@@ -28,6 +28,7 @@ export default function ConsolePage() {
           <Link href="/v1/alerts" label="GET /v1/alerts" />
           <Link href="/v1/mrms/files" label="GET /v1/mrms/files" />
           <Link href="/v1/mrms/grids" label="GET /v1/mrms/grids" />
+          <Link href="/v1/stats" label="GET /v1/stats" />
         </nav>
       </header>
 

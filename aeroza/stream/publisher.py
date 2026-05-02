@@ -20,6 +20,7 @@ from typing import Protocol
 import structlog
 
 from aeroza.ingest.mrms import MrmsFile
+from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.ingest.nws_alerts import Alert
 
 log = structlog.get_logger(__name__)
@@ -100,6 +101,54 @@ class InMemoryMrmsFilePublisher:
 
     async def publish_new_file(self, file: MrmsFile) -> None:
         self._published.append(file)
+
+    def clear(self) -> None:
+        self._published.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Materialised MRMS grids                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class MrmsGridPublisher(Protocol):
+    """Emits one event per newly-materialised MRMS grid.
+
+    The semantic is "first time this file_key has been turned into a Zarr
+    store" — re-materialisations of an updated source file do not produce
+    a new event (mirrors the file-catalog publisher's "newly-discovered"
+    semantic).
+    """
+
+    async def publish_new_grid(
+        self, locator: MrmsGridLocator
+    ) -> None:  # pragma: no cover - interface
+        ...
+
+
+class NullMrmsGridPublisher:
+    """Drops every event."""
+
+    async def publish_new_grid(self, locator: MrmsGridLocator) -> None:
+        log.debug("publisher.null.drop", file_key=locator.file_key)
+
+
+class InMemoryMrmsGridPublisher:
+    """Captures published locators in a list — for tests only."""
+
+    def __init__(self) -> None:
+        self._published: list[MrmsGridLocator] = []
+
+    @property
+    def published(self) -> tuple[MrmsGridLocator, ...]:
+        return tuple(self._published)
+
+    @property
+    def published_keys(self) -> tuple[str, ...]:
+        return tuple(loc.file_key for loc in self._published)
+
+    async def publish_new_grid(self, locator: MrmsGridLocator) -> None:
+        self._published.append(locator)
 
     def clear(self) -> None:
         self._published.clear()

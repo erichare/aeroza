@@ -27,6 +27,7 @@ from aeroza.ingest.mrms_materialise_poll import materialise_unmaterialised_once
 from aeroza.ingest.mrms_store import upsert_mrms_files
 from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.shared.db import Database
+from aeroza.stream.publisher import InMemoryMrmsGridPublisher, MrmsGridPublisher
 
 pytestmark = pytest.mark.integration
 
@@ -282,3 +283,92 @@ async def test_orchestrator_respects_batch_size(integration_db: Database, tmp_pa
 
     assert result.materialised == 2
     assert result.failed == 0
+
+
+# ---------------------------------------------------------------------------
+# Publisher integration
+
+
+async def test_publishes_one_event_per_materialised_grid(
+    integration_db: Database, tmp_path: Path
+) -> None:
+    a, b = _file(suffix="120000"), _file(suffix="120200")
+    await _seed_files(integration_db, a, b)
+
+    publisher = InMemoryMrmsGridPublisher()
+    download, decode = _patch_download_and_decode()
+    with download, decode:
+        await materialise_unmaterialised_once(
+            db=integration_db,
+            s3_client=object(),
+            target_root=tmp_path,
+            product=PRODUCT,
+            level=LEVEL,
+            batch_size=10,
+            publisher=publisher,
+        )
+
+    assert set(publisher.published_keys) == {a.key, b.key}
+
+
+async def test_does_not_publish_when_decode_fails(integration_db: Database, tmp_path: Path) -> None:
+    """A failed materialisation must NOT emit a grid event."""
+    from aeroza.ingest.mrms_decode import MrmsDecodeError
+
+    f = _file(suffix="120000")
+    await _seed_files(integration_db, f)
+
+    publisher = InMemoryMrmsGridPublisher()
+    download = patch(
+        "aeroza.ingest.mrms_grids.download_grib2_payload",
+        return_value=b"fake",
+    )
+    decode = patch(
+        "aeroza.ingest.mrms_grids.decode_grib2_to_dataarray",
+        side_effect=MrmsDecodeError("boom"),
+    )
+    with download, decode:
+        result = await materialise_unmaterialised_once(
+            db=integration_db,
+            s3_client=object(),
+            target_root=tmp_path,
+            product=PRODUCT,
+            level=LEVEL,
+            publisher=publisher,
+        )
+
+    assert result.failed_keys == (f.key,)
+    assert publisher.published_keys == ()
+
+
+async def test_publisher_failures_do_not_break_persistence(
+    integration_db: Database, tmp_path: Path
+) -> None:
+    """A flaky publisher must not roll back the upsert. The catalog is
+    durably persisted; a future replay catches up missed events."""
+
+    class FlakyPublisher:
+        async def publish_new_grid(self, locator: MrmsGridLocator) -> None:
+            raise RuntimeError(f"transport down for {locator.file_key}")
+
+    f = _file(suffix="120000")
+    await _seed_files(integration_db, f)
+
+    publisher: MrmsGridPublisher = FlakyPublisher()
+    download, decode = _patch_download_and_decode()
+    with download, decode:
+        result = await materialise_unmaterialised_once(
+            db=integration_db,
+            s3_client=object(),
+            target_root=tmp_path,
+            product=PRODUCT,
+            level=LEVEL,
+            publisher=publisher,
+        )
+
+    # Materialisation succeeded even though publish raised.
+    assert result.materialised_keys == (f.key,)
+    assert result.failed_keys == ()
+    async with integration_db.sessionmaker() as session:
+        rows = (await session.execute(select(MrmsGridRow))).scalars().all()
+    assert {r.file_key for r in rows} == {f.key}

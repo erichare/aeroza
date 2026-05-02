@@ -92,6 +92,27 @@ export interface Health {
   version: string;
 }
 
+export interface AlertsStats {
+  total: number;
+  active: number;
+  latestExpires: string | null;
+}
+
+export interface MrmsStats {
+  files: number;
+  gridsMaterialised: number;
+  filesPending: number;
+  latestValidAt: string | null;
+  latestGridMaterialisedAt: string | null;
+}
+
+export interface Stats {
+  type: "Stats";
+  generatedAt: string;
+  alerts: AlertsStats;
+  mrms: MrmsStats;
+}
+
 // ---------------------------------------------------------------------------
 // Fetchers
 // ---------------------------------------------------------------------------
@@ -120,6 +141,10 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchHealth(): Promise<Health> {
   return getJson<Health>("/health");
+}
+
+export async function fetchStats(): Promise<Stats> {
+  return getJson<Stats>("/v1/stats");
 }
 
 export interface AlertQuery {

@@ -24,6 +24,7 @@ import structlog
 from aeroza.ingest.mrms_grids import materialise_mrms_file
 from aeroza.ingest.mrms_grids_store import find_unmaterialised_files
 from aeroza.shared.db import Database
+from aeroza.stream.publisher import MrmsGridPublisher, NullMrmsGridPublisher
 
 log = structlog.get_logger(__name__)
 
@@ -55,6 +56,7 @@ async def materialise_unmaterialised_once(
     product: str,
     level: str,
     batch_size: int = 8,
+    publisher: MrmsGridPublisher | None = None,
 ) -> MaterialiseResult:
     """One materialisation tick.
 
@@ -65,10 +67,24 @@ async def materialise_unmaterialised_once(
        fan out across files — Zarr writes touch the filesystem and
        cfgrib's eccodes binding is not thread-safe; one-at-a-time keeps
        the worker boring and predictable.
-    3. Per-file failures are caught and logged; the rest of the batch
+    3. After a successful materialisation, publish ``aeroza.mrms.grids.new``
+       via ``publisher``. Defaults to :class:`NullMrmsGridPublisher` when
+       streaming is disabled. Publisher errors are logged but do not roll
+       back the materialisation — the catalog is durable, a future replay
+       can catch up missed events. Same envelope as the file-catalog
+       publisher.
+    4. Per-file failures are caught and logged; the rest of the batch
        still runs. The returned :class:`MaterialiseResult` reports both
        success and failure keys so the CLI can surface them.
+
+    Single-worker assumption: ``find_unmaterialised_files`` only returns
+    files without a grid, so every successful tick is a fresh
+    materialisation. With concurrent workers the upsert's WHERE-clause
+    no-op semantic protects DB integrity, but the publisher would still
+    fire — see the file-catalog publisher for the same trade-off.
     """
+    pub = publisher if publisher is not None else NullMrmsGridPublisher()
+
     async with db.sessionmaker() as session:
         files = await find_unmaterialised_files(
             session, product=product, level=level, limit=batch_size
@@ -82,13 +98,12 @@ async def materialise_unmaterialised_once(
     failed: list[str] = []
     for file in files:
         try:
-            await materialise_mrms_file(
+            locator = await materialise_mrms_file(
                 db=db,
                 s3_client=s3_client,
                 file=file,
                 target_root=target_root,
             )
-            materialised.append(file.key)
         except Exception as exc:
             log.exception(
                 "mrms.materialise.tick.failed",
@@ -98,6 +113,17 @@ async def materialise_unmaterialised_once(
                 error=str(exc),
             )
             failed.append(file.key)
+            continue
+
+        materialised.append(file.key)
+        try:
+            await pub.publish_new_grid(locator)
+        except Exception as exc:
+            log.exception(
+                "mrms.materialise.tick.publish_failed",
+                key=file.key,
+                error=str(exc),
+            )
 
     log.info(
         "mrms.materialise.tick",

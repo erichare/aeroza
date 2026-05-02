@@ -1,4 +1,4 @@
-"""Unit tests for publisher implementations (alerts + MRMS files)."""
+"""Unit tests for publisher implementations (alerts + MRMS files + grids)."""
 
 from __future__ import annotations
 
@@ -8,14 +8,18 @@ import pytest
 from pydantic import BaseModel
 
 from aeroza.ingest.mrms import MrmsFile
+from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.ingest.nws_alerts import Alert
 from aeroza.stream.publisher import (
     AlertPublisher,
     InMemoryAlertPublisher,
     InMemoryMrmsFilePublisher,
+    InMemoryMrmsGridPublisher,
     MrmsFilePublisher,
+    MrmsGridPublisher,
     NullAlertPublisher,
     NullMrmsFilePublisher,
+    NullMrmsGridPublisher,
 )
 
 
@@ -134,3 +138,44 @@ class TestNullMrmsFilePublisher:
         await publisher.publish_new_file(_mrms("a"))
         await publisher.publish_new_file(_mrms("b"))
         assert isinstance(publisher, NullMrmsFilePublisher)
+
+
+def _locator(file_key: str) -> MrmsGridLocator:
+    return MrmsGridLocator(
+        file_key=file_key,
+        zarr_uri=f"/var/data/{file_key}.zarr",
+        variable="reflectivity",
+        dims=("latitude", "longitude"),
+        shape=(3500, 7000),
+        dtype="float32",
+        nbytes=3500 * 7000 * 4,
+    )
+
+
+@pytest.mark.unit
+class TestInMemoryMrmsGridPublisher:
+    async def test_captures_locators_in_order(self) -> None:
+        publisher = InMemoryMrmsGridPublisher()
+        await publisher.publish_new_grid(_locator("a"))
+        await publisher.publish_new_grid(_locator("b"))
+        await publisher.publish_new_grid(_locator("c"))
+        assert publisher.published_keys == ("a", "b", "c")
+
+    async def test_clear_drops_history(self) -> None:
+        publisher = InMemoryMrmsGridPublisher()
+        await publisher.publish_new_grid(_locator("a"))
+        publisher.clear()
+        assert publisher.published == ()
+        assert publisher.published_keys == ()
+
+    def test_satisfies_mrms_grid_publisher_protocol(self) -> None:
+        publisher: MrmsGridPublisher = InMemoryMrmsGridPublisher()
+        assert hasattr(publisher, "publish_new_grid")
+
+
+@pytest.mark.unit
+class TestNullMrmsGridPublisher:
+    async def test_drops_silently(self) -> None:
+        publisher = NullMrmsGridPublisher()
+        await publisher.publish_new_grid(_locator("a"))
+        assert isinstance(publisher, NullMrmsGridPublisher)

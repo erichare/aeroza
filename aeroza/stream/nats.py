@@ -6,6 +6,7 @@ Subject taxonomy
 - ``aeroza.alerts.nws.new`` — one message per newly-observed NWS alert.
 - ``aeroza.mrms.files.new`` — one message per newly-discovered MRMS object
   on AWS Open Data.
+- ``aeroza.mrms.grids.new`` — one message per newly-materialised Zarr grid.
 
 Future work will add severity / region / product facets so subscribers
 can filter without consuming the full firehose; we keep the surface
@@ -18,6 +19,8 @@ Payload
 - MRMS file messages: hand-rolled JSON because :class:`MrmsFile` is a
   frozen dataclass, not pydantic. Field names are camelCased on the wire
   to match the alert convention; ``valid_at`` is ISO-8601.
+- MRMS grid messages: hand-rolled JSON for the same reason. Camel-cased
+  field names match the ``/v1/mrms/grids`` wire shape.
 """
 
 from __future__ import annotations
@@ -31,12 +34,14 @@ import structlog
 from pydantic import ValidationError
 
 from aeroza.ingest.mrms import MrmsFile
+from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.ingest.nws_alerts import Alert
 
 log = structlog.get_logger(__name__)
 
 NWS_NEW_ALERT_SUBJECT: Final[str] = "aeroza.alerts.nws.new"
 MRMS_NEW_FILE_SUBJECT: Final[str] = "aeroza.mrms.files.new"
+MRMS_NEW_GRID_SUBJECT: Final[str] = "aeroza.mrms.grids.new"
 
 
 class NatsPublisher(Protocol):
@@ -126,6 +131,47 @@ def _encode_mrms_file(file: MrmsFile) -> bytes:
             "validAt": file.valid_at.isoformat(),
             "sizeBytes": file.size_bytes,
             "etag": file.etag,
+        }
+    ).encode("utf-8")
+
+
+class NatsMrmsGridPublisher:
+    """Publishes one NATS message per newly-materialised MRMS grid."""
+
+    def __init__(
+        self,
+        client: NatsPublisher,
+        *,
+        subject: str = MRMS_NEW_GRID_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def publish_new_grid(self, locator: MrmsGridLocator) -> None:
+        payload = _encode_mrms_grid(locator)
+        await self._client.publish(self._subject, payload)
+        log.debug(
+            "nats.mrms_grid.publish",
+            subject=self._subject,
+            file_key=locator.file_key,
+            bytes=len(payload),
+        )
+
+
+def _encode_mrms_grid(locator: MrmsGridLocator) -> bytes:
+    return json.dumps(
+        {
+            "fileKey": locator.file_key,
+            "zarrUri": locator.zarr_uri,
+            "variable": locator.variable,
+            "dims": list(locator.dims),
+            "shape": list(locator.shape),
+            "dtype": locator.dtype,
+            "nbytes": locator.nbytes,
         }
     ).encode("utf-8")
 
