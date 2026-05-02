@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { DocsLayout } from "@/components/DocsLayout";
 
@@ -99,6 +100,16 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
           "Polygon vertices on lng,lat,lng,lat,…; ring implicitly closed; " +
           "count_ge requires a numeric threshold.",
       },
+      {
+        method: "GET",
+        path: "/v1/mrms/tiles/{z}/{x}/{y}.png",
+        summary:
+          "Web-Mercator XYZ raster tile of the latest matching MRMS grid.",
+        notes:
+          "256×256 PNG with the standard NWS dBZ ramp; transparent fallback " +
+          "when no grid is materialised. Pass fileKey to pin a specific " +
+          "source. Cache-Control: max-age=60.",
+      },
     ],
   },
   {
@@ -119,6 +130,15 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
         notes:
           "Sample-weighted MAE / bias / RMSE over the window. Default " +
           "windowHours=24; supports algorithm / product / level filters.",
+      },
+      {
+        method: "GET",
+        path: "/v1/calibration/series",
+        summary:
+          "Time-bucketed companion to /v1/calibration — sparkline per (algorithm, horizon).",
+        notes:
+          "Same metrics, with one extra group-by on bucketStart. " +
+          "bucketSeconds in [300, 86400] (default 3600 / 1 hour).",
       },
     ],
   },
@@ -175,9 +195,11 @@ export default function ApiReferencePage() {
         v1 is the contract <em>shape</em> we're committing to — JSON envelope,
         camelCase aliases, GeoJSON ordering. Adding new fields to a response
         payload is non-breaking; removing or renaming will bump the route to{" "}
-        <code>/v2</code>. The TypeScript SDK (<code>@aeroza/sdk</code>) lands
-        next and pins the wire types so consumers get a compile-time signal
-        when something changes.
+        <code>/v2</code>. The TypeScript SDK (<code>@aeroza/sdk</code>) pins
+        the wire types so consumers get a compile-time signal when something
+        changes; the dev console at <Link href="/console">/console</Link> is
+        the same SDK driving every panel, so any awkwardness in the contract
+        shows up in the SDK first.
       </p>
     </DocsLayout>
   );

@@ -18,8 +18,9 @@ const FEATURES: ReadonlyArray<Feature> = [
     title: "Real-time radar & alerts",
     body:
       "MRMS reflectivity grids materialised in seconds, NWS alerts streamed " +
-      "as Server-Sent Events. The data layer is live, not batch.",
-    endpoint: "GET /v1/alerts/stream",
+      "as Server-Sent Events, and a Web-Mercator tile route ready to drop " +
+      "into MapLibre or Leaflet.",
+    endpoint: "GET /v1/mrms/tiles/{z}/{x}/{y}.png",
     status: "ready",
   },
   {
@@ -31,13 +32,14 @@ const FEATURES: ReadonlyArray<Feature> = [
     status: "ready",
   },
   {
-    title: "Probabilistic nowcasting",
+    title: "Calibrated nowcasting",
     body:
-      "Predicted reflectivity 10 / 30 / 60 minutes out, with calibrated " +
-      "confidence and a public reliability diagram. Built on pySTEPS today, " +
+      "Predicted reflectivity 10 / 30 / 60 minutes out, scored against the " +
+      "matching observation as soon as truth lands. Public MAE / bias / RMSE " +
+      "per algorithm × horizon — persistence baseline today, pySTEPS / " +
       "NowcastNet next.",
-    endpoint: null,
-    status: "soon",
+    endpoint: "GET /v1/calibration",
+    status: "ready",
   },
 ];
 
@@ -129,11 +131,7 @@ function FeatureCard({ feature }: { feature: Feature }) {
         <code className="mt-auto rounded-md border border-border/60 bg-bg/40 px-2 py-1 font-mono text-[11px] text-muted">
           {feature.endpoint}
         </code>
-      ) : (
-        <span className="mt-auto font-mono text-[11px] text-muted/70">
-          schema lands with Phase 3 (calibrated nowcasts)
-        </span>
-      )}
+      ) : null}
     </article>
   );
 }

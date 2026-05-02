@@ -92,6 +92,19 @@ export default function ConceptsPage() {
         (nowcasting, alerts, webhooks) can subscribe to.
       </p>
 
+      <h2>Raster tiles (the map layer)</h2>
+      <p>
+        <code>GET /v1/mrms/tiles/&#123;z&#125;/&#123;x&#125;/&#123;y&#125;.png</code>{" "}
+        renders a 256×256 Web-Mercator tile of the latest matching grid:
+        nearest-neighbour sample from the Zarr store, NWS dBZ ramp,
+        86%-opaque so the basemap shows through where there's no echo.
+        Tiles outside the grid extent (or when no grid has materialised
+        yet) come back as a fully-transparent PNG so MapLibre / Leaflet
+        don't spam 404 retries. <code>fileKey</code> pins a specific
+        grid — used by the timeline scrubber on{" "}
+        <Link href="/map">/map</Link> to fetch historical tiles.
+      </p>
+
       <h2>Point sample</h2>
       <p>
         <code>GET /v1/mrms/grids/sample?lat=&amp;lng=</code> returns the
@@ -242,6 +255,15 @@ export default function ConceptsPage() {
         cells contributes 1M times to the bucket. Small windows of bad
         weather shouldn't dominate the average just because they're more
         frequent.
+      </p>
+      <p>
+        For trend-watching,{" "}
+        <code>GET /v1/calibration/series</code> returns the same metrics
+        time-bucketed (<code>bucketSeconds</code> from 5 min to 1 day).
+        That's what the sparkline on{" "}
+        <Link href="/calibration">/calibration</Link> charts: same Y-axis
+        per row so a row's downward trend lines up with a peer's at a
+        glance.
       </p>
       <p>
         Per the plan §3.3, calibration is the <em>trust</em> signal nobody
