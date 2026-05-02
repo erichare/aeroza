@@ -118,3 +118,124 @@ jobs:
           name: coverage-integration-xml
           path: coverage.xml
           if-no-files-found: ignore
+
+  web-e2e:
+    name: web · Playwright /map smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_DB: aeroza
+          POSTGRES_USER: aeroza
+          POSTGRES_PASSWORD: aeroza
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aeroza -d aeroza"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://aeroza:aeroza@localhost:5432/aeroza
+      NEXT_PUBLIC_AEROZA_API_URL: http://localhost:8000
+      AEROZA_WEB_E2E_PORT: "3100"
+      AEROZA_WEB_E2E_REUSE_SERVER: "1"
+      AEROZA_WEB_E2E_BASE_URL: http://localhost:3100
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # ---- Python / API setup ----
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.4"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies (skip [grib] — Playwright doesn't need eccodes)
+        run: uv sync --extra db --extra cache --extra stream --extra ingest --extra verify --frozen || uv sync --extra db --extra cache --extra stream --extra ingest --extra verify
+
+      - name: Run Alembic migrations on the dev DB
+        run: uv run alembic upgrade head
+
+      - name: Start the API in the background
+        # `nohup` so the process keeps running after the step exits;
+        # `& disown` would also work but nohup matches the rest of CI.
+        run: |
+          nohup uv run uvicorn aeroza.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          # Poll until /health returns 200, with a 60s ceiling.
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health -o /dev/null; then
+              echo "API up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not start in time"
+          tail -50 /tmp/api.log
+          exit 1
+
+      # ---- Web setup ----
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm workspaces
+        run: npm install --no-audit --no-fund
+
+      - name: Build the web app
+        working-directory: web
+        run: npm run build
+
+      - name: Start the web app in the background
+        working-directory: web
+        run: |
+          nohup npm run start -- --port 3100 > /tmp/web.log 2>&1 &
+          echo $! > /tmp/web.pid
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:3100/ -o /dev/null; then
+              echo "Web up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Web did not start in time"
+          tail -50 /tmp/web.log
+          exit 1
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright smoke tests
+        working-directory: web
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+
+      - name: Stop background services
+        if: always()
+        run: |
+          [ -f /tmp/api.pid ] && kill "$(cat /tmp/api.pid)" || true
+          [ -f /tmp/web.pid ] && kill "$(cat /tmp/web.pid)" || true
