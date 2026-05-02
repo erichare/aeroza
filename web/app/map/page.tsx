@@ -225,12 +225,16 @@ function SeverityCount({ severity, count }: { severity: Severity; count: number 
   );
 }
 
+// Header severity dots — a slightly lighter / more luminous take on the
+// map fill palette so they read against the glacier background in the
+// nav strip. Same semantic ordering as `SEVERITY_FILL_COLOR` in
+// `AlertsMap`.
 const SEVERITY_HEX: Record<Severity, string> = {
-  Extreme: "#f87171",
-  Severe: "#fbbf24",
-  Moderate: "#38bdfa",
-  Minor: "#34d399",
-  Unknown: "#94a3b8",
+  Extreme: "#c45a5a",
+  Severe: "#d6a14a",
+  Moderate: "#5993ad",
+  Minor: "#5aa090",
+  Unknown: "#8694a3",
 };
 
 interface AlertLike {

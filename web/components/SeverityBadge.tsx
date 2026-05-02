@@ -1,9 +1,9 @@
 import type { Severity } from "@/lib/api";
 
-// On the parchment theme the background tints are barely visible at low
-// alpha, so each severity gets a slightly stronger fill than the dark-mode
-// version while keeping text contrast (text + border use the saturated
-// palette colours directly).
+// Background tints are barely visible at low alpha against the glacier
+// surface, so each severity gets a slightly stronger fill than a
+// dark-mode equivalent would need. Text + border use the saturated
+// palette colours directly so the urgency ladder reads at a glance.
 const SEVERITY_STYLES: Record<Severity, string> = {
   Extreme: "bg-danger/15 text-danger border-danger/50",
   Severe: "bg-warning/15 text-warning border-warning/50",

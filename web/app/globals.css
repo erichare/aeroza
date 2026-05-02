@@ -3,22 +3,23 @@
 @tailwind utilities;
 
 /*
- * Aeroza palette — warm light (parchment).
- * Stored as raw RGB triples (not hex) so Tailwind's `<alpha-value>` syntax
- * can mix in opacity (e.g. `bg-surface/60`). Cream base, ember accent,
- * cocoa text — readable in daylight, still distinct from the genre-default
- * stark white. Severity stays semantic but darkened so it reads on cream.
+ * Aeroza palette — "Meridian": cool instrument-shop ground with a single
+ * warm spark. Pale glacier base, prussian-ink text, aged-brass accent —
+ * reads like a marine chronometer or aviation chart, professional without
+ * the genre-default warm-SaaS feel. Stored as raw RGB triples (not hex)
+ * so Tailwind's `<alpha-value>` syntax can mix in opacity
+ * (e.g. `bg-surface/60`).
  */
 :root {
-  --bg: 250 244 234;        /* parchment */
-  --surface: 253 248 240;    /* card / panel — barely lifted off bg */
-  --border: 226 213 192;     /* warm beige */
-  --muted: 124 102 80;       /* warm taupe */
-  --text: 42 32 24;          /* deep cocoa */
-  --accent: 199 92 41;        /* ember / sunburst */
-  --success: 96 130 50;      /* deep olive */
-  --warning: 178 110 26;     /* dark amber */
-  --danger: 178 53 36;       /* terracotta */
+  --bg: 232 236 240;         /* pale glacier */
+  --surface: 247 248 250;    /* bone — barely lifted off bg */
+  --border: 197 207 218;     /* mist */
+  --muted: 100 116 134;      /* cool slate */
+  --text: 16 28 44;          /* prussian ink */
+  --accent: 174 122 51;      /* aged brass — the warm spark */
+  --success: 47 112 95;      /* sea green */
+  --warning: 196 142 47;     /* autumn brass */
+  --danger: 168 65 64;       /* signal coral */
 }
 
 html,
@@ -32,11 +33,12 @@ body {
 
 body {
   min-height: 100vh;
-  /* Two soft warm radials anchor the page corners — sunset sky over
-   * cream. Pale enough that text never loses contrast. */
+  /* Two pale washes anchor the page corners — cool glacier light from
+   * the top-left, a subtle brass haze from the upper-right (the only
+   * warm note). Both faint enough that text never loses contrast. */
   background-image:
-    radial-gradient(1200px 600px at 10% -10%, rgba(199, 92, 41, 0.07), transparent 60%),
-    radial-gradient(1000px 800px at 110% 0%, rgba(178, 110, 26, 0.05), transparent 55%);
+    radial-gradient(1200px 600px at 10% -10%, rgba(82, 122, 158, 0.10), transparent 60%),
+    radial-gradient(1000px 800px at 110% 0%, rgba(174, 122, 51, 0.05), transparent 55%);
   background-attachment: fixed;
 }
 

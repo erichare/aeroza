@@ -34,9 +34,10 @@ const STATES_SOURCE_ID = "us-states";
 const STATES_LINE_LAYER_ID = "us-states-line";
 // State borders sit above radar so the line is always visible, but below
 // alerts so a severe-storm polygon still wins for hit-testing. The line
-// colour is a desaturated charcoal that reads on both the cream basemap
-// and through translucent radar without competing with the alert palette.
-const STATE_BORDER_COLOR = "#3a2f24";
+// colour is a desaturated prussian ink that reads on both the glacier
+// basemap and through translucent radar without competing with the alert
+// palette.
+const STATE_BORDER_COLOR = "#1a2638";
 
 const REFRESH_INTERVAL_MS = 30_000;
 // Bust the radar tile cache once per minute so the layer trends fresh as
@@ -55,14 +56,15 @@ const SEVERITY_ORDER: Severity[] = [
 
 // Hex colors keyed off the same palette that powers SeverityBadge — kept here
 // because MapLibre paint expressions can't read CSS custom properties. Tuned
-// for the light/parchment theme: deeper, more saturated than the dark-mode
-// versions so polygons still read on a cream basemap.
+// for the Meridian theme: cooler / more muted than the warm-parchment
+// versions, with a single warm note (Severe) so the urgency ladder still
+// reads at a glance over the glacier basemap.
 const SEVERITY_FILL_COLOR: Record<Severity, string> = {
-  Extreme: "#b23524",   // terracotta red
-  Severe: "#c75c29",    // ember
-  Moderate: "#1e6f9e",  // ocean blue (semantic info — kept cool against warm palette)
-  Minor: "#5d8e35",     // deep olive
-  Unknown: "#7c6650",   // taupe
+  Extreme: "#a84140",   // signal coral
+  Severe: "#c4892f",    // autumn brass
+  Moderate: "#3a7894",  // muted petrol
+  Minor: "#3f8474",     // sea green
+  Unknown: "#647686",   // cool slate
 };
 
 // CARTO's basemap raster tiles — free, attribution-required. The
