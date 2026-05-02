@@ -11,12 +11,13 @@ import argparse
 import sys
 from collections.abc import Callable
 
-from aeroza.cli import ingest_alerts, ingest_mrms, materialise_mrms
+from aeroza.cli import dispatch_webhooks, ingest_alerts, ingest_mrms, materialise_mrms
 
 SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
     "ingest-alerts": ingest_alerts.main,
     "ingest-mrms": ingest_mrms.main,
     "materialise-mrms": materialise_mrms.main,
+    "dispatch-webhooks": dispatch_webhooks.main,
 }
 
 

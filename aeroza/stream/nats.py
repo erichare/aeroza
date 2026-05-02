@@ -277,6 +277,61 @@ class NatsMrmsFileSubscriber:
             log.debug("nats.mrms.unsubscribe", subject=self._subject)
 
 
+def _decode_mrms_grid(data: bytes) -> MrmsGridLocator:
+    """Reverse of :func:`_encode_mrms_grid`. Raises ``ValueError`` /
+    ``KeyError`` on malformed input; the subscriber turns either into
+    a "bad payload, skipping" log entry."""
+    obj = json.loads(data)
+    return MrmsGridLocator(
+        file_key=obj["fileKey"],
+        zarr_uri=obj["zarrUri"],
+        variable=obj["variable"],
+        dims=tuple(str(d) for d in obj.get("dims", ())),
+        shape=tuple(int(s) for s in obj.get("shape", ())),
+        dtype=obj["dtype"],
+        nbytes=int(obj.get("nbytes", 0)),
+    )
+
+
+class NatsMrmsGridSubscriber:
+    """Yields MRMS grid locator events arriving on a NATS subject.
+
+    Mirror of :class:`NatsMrmsFileSubscriber`; same per-call independent
+    subscription + log-and-skip semantics on bad payloads.
+    """
+
+    def __init__(
+        self,
+        client: NatsSubscriberClient,
+        *,
+        subject: str = MRMS_NEW_GRID_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def subscribe_new_grids(self) -> AsyncIterator[MrmsGridLocator]:
+        sub = await self._client.subscribe(self._subject)
+        log.debug("nats.mrms_grid.subscribe", subject=self._subject)
+        try:
+            async for msg in sub.messages:
+                data: bytes = getattr(msg, "data", b"")
+                try:
+                    yield _decode_mrms_grid(data)
+                except (ValueError, KeyError) as exc:
+                    log.warning(
+                        "nats.mrms_grid.subscribe.bad_payload",
+                        subject=self._subject,
+                        error=str(exc),
+                    )
+        finally:
+            await sub.unsubscribe()
+            log.debug("nats.mrms_grid.unsubscribe", subject=self._subject)
+
+
 @asynccontextmanager
 async def nats_connection(servers: str | list[str]) -> AsyncIterator[NatsClient]:
     """Open a NATS connection and close it on exit.
