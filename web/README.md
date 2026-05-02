@@ -1,9 +1,10 @@
 # Aeroza · dev console
 
-A minimal Next.js 15 app that visualises the Aeroza FastAPI surface. Three panels:
+A minimal Next.js 15 app that visualises the Aeroza FastAPI surface. Four panels:
 
 - **Alerts · live stream** — `/v1/alerts/stream` (SSE) plus a polled `/v1/alerts` list.
 - **MRMS · file catalog** — `/v1/mrms/files` with a sliver-timeline of `valid_at` and per-row stats.
+- **MRMS · materialised grids** — `/v1/mrms/grids` with locator metadata (variable, shape, dtype, Zarr URI).
 - **System · health** — `/health` polled every 10 s.
 
 This is the dev/demo client. The polished Phase 5 reference web app
@@ -36,9 +37,9 @@ the SSE stream is the hardest thing to demo without a UI, and the MRMS
 catalog goes from "rows in Postgres" to "files arriving every 2 minutes"
 much faster when you can see the timeline tick.
 
-When `/v1/mrms/grids` and the read API for materialised grids ship, this
-console will gain a fourth panel rendering the most-recent reflectivity
-grid as a quick canvas heatmap. The map (MapLibre + vector tiles) belongs
+A future iteration will render the most-recent reflectivity grid as a
+quick canvas heatmap once the API serves array slices (currently only
+locator metadata is exposed). The map (MapLibre + vector tiles) belongs
 to the Phase 5 polished client.
 
 ## Stack

@@ -11,6 +11,10 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   ``description`` and ``instruction`` fields that the list endpoint omits.
 - ``GET /v1/mrms/files`` — MRMS catalog ("what data is available right
   now") populated by the ``aeroza-ingest-mrms`` worker.
+- ``GET /v1/mrms/grids`` — materialised-grid catalog ("what data is
+  decoded and queryable right now") populated by the
+  ``aeroza-materialise-mrms`` worker.
+- ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
@@ -50,6 +54,19 @@ from aeroza.query.mrms import (
     MrmsFileList,
     find_mrms_files,
     mrms_view_to_item,
+)
+from aeroza.query.mrms_grids import (
+    DEFAULT_LIMIT as GRIDS_DEFAULT_LIMIT,
+)
+from aeroza.query.mrms_grids import (
+    MAX_LIMIT as GRIDS_MAX_LIMIT,
+)
+from aeroza.query.mrms_grids import (
+    MrmsGridItem,
+    MrmsGridList,
+    find_mrms_grid_by_key,
+    find_mrms_grids,
+    mrms_grid_view_to_item,
 )
 from aeroza.query.parsers import parse_bbox, parse_point
 from aeroza.query.schemas import (
@@ -259,3 +276,95 @@ async def list_mrms_files_route(
         limit=limit,
     )
     return MrmsFileList(items=[mrms_view_to_item(v) for v in views])
+
+
+@router.get(
+    "/mrms/grids",
+    response_model=MrmsGridList,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["mrms"],
+    summary="List materialised MRMS grids",
+    description=(
+        "Returns the most-recent rows of the materialised-grid catalog "
+        "populated by the ``aeroza-materialise-mrms`` worker. Each item "
+        "carries the locator (``zarrUri``, ``shape``, ``dtype``, …) and "
+        "the source file's product/level/valid_at. Same filters as "
+        "``/v1/mrms/files``."
+    ),
+)
+async def list_mrms_grids_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    product: Annotated[
+        str | None,
+        Query(description="Filter to a single product (e.g. 'MergedReflectivityComposite')"),
+    ] = None,
+    level: Annotated[
+        str | None,
+        Query(description="Filter to a single product level (e.g. '00.50')"),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(description="Inclusive lower bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(description="Exclusive upper bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=GRIDS_MAX_LIMIT,
+            description=f"Max results to return (default {GRIDS_DEFAULT_LIMIT})",
+        ),
+    ] = GRIDS_DEFAULT_LIMIT,
+) -> MrmsGridList:
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="since must be strictly before until",
+        )
+    views = await find_mrms_grids(
+        session,
+        product=product,
+        level=level,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    return MrmsGridList(items=[mrms_grid_view_to_item(v) for v in views])
+
+
+@router.get(
+    "/mrms/grids/{file_key:path}",
+    response_model=MrmsGridItem,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["mrms"],
+    summary="Get a single materialised MRMS grid by source S3 key",
+    description=(
+        "Returns the locator + product/level/valid_at for one materialised "
+        "grid identified by its source S3 ``file_key`` (the same key "
+        "returned by ``/v1/mrms/files``). The ``:path`` converter accepts "
+        "the slash-bearing CONUS-prefixed key as a single parameter."
+    ),
+    responses={404: {"description": "No materialised grid for that file_key."}},
+)
+async def get_mrms_grid_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    file_key: Annotated[
+        str,
+        Path(
+            description="S3 key of the source MRMS file (e.g. 'CONUS/.../MRMS_..._120000.grib2.gz')",
+            min_length=1,
+        ),
+    ],
+) -> MrmsGridItem:
+    view = await find_mrms_grid_by_key(session, file_key)
+    if view is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no materialised grid for file_key {file_key!r}",
+        )
+    return mrms_grid_view_to_item(view)
