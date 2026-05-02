@@ -95,11 +95,21 @@ What's still out of scope (intentionally) for v1:
 - Per-key rate limiting (Redis token-bucket). The `rate_limit_class` column exists; the dependency that reads it lands once enforcement turns on.
 - Scope-aware route gating. The shape is in place (keys carry a `scopes: text[]`); the per-route enforcement comes alongside the rate limiter.
 
+### Phase 6d — METAR ingest
+
+Surface-station observations from the Aviation Weather Center JSON API. The `aeroza-ingest-metar` worker polls a configurable station list (default: a CONUS top-20 sample) every 5 minutes; AWC returns already-parsed records, so there is no in-tree METAR text parser. The raw text is preserved on each row for callers who want their own.
+
+Public surface:
+
+- `GET /v1/metar` — list with `station`, `since`, `until`, `bbox`, `limit` filters; newest first.
+- `GET /v1/metar/{station_id}/latest` — most-recent observation for one station.
+
+Useful as ground-truth point observations next to the MRMS gridded products, especially for sanity-checking nowcasts or computing station-resolved verification.
+
 ### More ingest sources
 
 - **NEXRAD Level II** (`s3://noaa-nexrad-level2`). Single-radar Cartesian products via `pyart`. Higher resolution than MRMS, narrower coverage. Useful for hyperlocal reflectivity / velocity.
 - **HRRR / NBM model data** (`s3://noaa-hrrr-bdp-pds`). 3 km / 2.5 km gridded forecasts. The input for any "real" nowcaster beyond extrapolation; also the input for hours-out forecast data the API doesn't yet expose.
-- **METAR** surface observations from `aviationweather.gov`. Simple JSON, useful for ground truth + station-resolved queries.
 
 ## Later (phase 7+)
 

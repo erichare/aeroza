@@ -123,6 +123,27 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
     ],
   },
   {
+    section: "METAR (surface observations)",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/metar",
+        summary: "List recent METAR observations, newest first.",
+        notes:
+          "Filter by station (case-insensitive ICAO id), since, until, bbox " +
+          "(min_lng,min_lat,max_lng,max_lat), and limit (default 100, max 500). " +
+          "Sourced from aviationweather.gov; rows include parsed temp/wind/visibility " +
+          "plus the raw METAR text for custom parsers.",
+      },
+      {
+        method: "GET",
+        path: "/v1/metar/{station_id}/latest",
+        summary: "Most-recent observation for one ICAO station.",
+        notes: "Case-insensitive on the path. 404 when the station has no observations.",
+      },
+    ],
+  },
+  {
     section: "Nowcasts & calibration",
     routes: [
       {

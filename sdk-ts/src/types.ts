@@ -149,6 +149,48 @@ export interface Me {
   lastUsedAt: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// METAR — surface observations from the Aviation Weather Center JSON API.
+//
+// Measurement fields are all nullable: AWC drops sensor readings that
+// weren't reporting, but the row itself (with stationId + observationTime)
+// is persisted so "last seen" queries are accurate.
+
+export interface MetarObservation {
+  type: "MetarObservation";
+  stationId: string;
+  observationTime: string;
+  latitude: number;
+  longitude: number;
+  rawText: string;
+  tempC: number | null;
+  dewpointC: number | null;
+  windSpeedKt: number | null;
+  windDirectionDeg: number | null;
+  windGustKt: number | null;
+  visibilitySm: number | null;
+  altimeterHpa: number | null;
+  flightCategory: string | null;
+}
+
+export interface MetarObservationList {
+  type: "MetarObservationList";
+  items: MetarObservation[];
+}
+
+export interface MetarQuery {
+  /** ICAO 4-letter id (case-insensitive). */
+  station?: string;
+  /** ISO-8601 lower bound (inclusive) on observationTime. */
+  since?: string;
+  /** ISO-8601 upper bound (exclusive) on observationTime. */
+  until?: string;
+  /** `min_lng,min_lat,max_lng,max_lat` — same convention as alerts. */
+  bbox?: string;
+  /** Default 100, max 500. */
+  limit?: number;
+}
+
 export interface AlertsStats {
   total: number;
   active: number;

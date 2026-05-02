@@ -25,6 +25,9 @@ import type {
   CalibrationSeriesQuery,
   CalibrationSeriesResponse,
   Me,
+  MetarObservation,
+  MetarObservationList,
+  MetarQuery,
   WebhookSubscriptionList,
   WebhookSubscriptionQuery,
   Health,
@@ -240,6 +243,27 @@ export class AeroaClient {
     if (query.level) params.set("level", query.level);
     return this.getJson<CalibrationSeriesResponse>(
       this.withQuery("/v1/calibration/series", params),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // METAR
+
+  async listMetar(query: MetarQuery = {}): Promise<MetarObservationList> {
+    const params = new URLSearchParams();
+    if (query.station) params.set("station", query.station);
+    if (query.since) params.set("since", query.since);
+    if (query.until) params.set("until", query.until);
+    if (query.bbox) params.set("bbox", query.bbox);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    return this.getJson<MetarObservationList>(
+      this.withQuery("/v1/metar", params),
+    );
+  }
+
+  async getLatestMetar(stationId: string): Promise<MetarObservation> {
+    return this.getJson<MetarObservation>(
+      `/v1/metar/${encodeURIComponent(stationId)}/latest`,
     );
   }
 
