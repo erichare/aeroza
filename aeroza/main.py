@@ -16,6 +16,7 @@ from aeroza.query.v1 import router as v1_router
 from aeroza.shared.db import create_engine_and_session
 from aeroza.stream.nats import NatsAlertSubscriber, nats_connection
 from aeroza.webhooks.routes import router as webhooks_router
+from aeroza.webhooks.rule_routes import router as alert_rules_router
 
 log = structlog.get_logger(__name__)
 
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
 
     app.include_router(v1_router)
     app.include_router(webhooks_router)
+    app.include_router(alert_rules_router)
     return app
 
 
