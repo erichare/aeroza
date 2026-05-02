@@ -170,9 +170,10 @@ function FeedColumn({
   errored?: boolean;
 }) {
   return (
-    <div className="flex min-h-[20rem] flex-col rounded-xl border border-border/60 bg-bg/40">
-      <div className="border-b border-border/60 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-        {heading}
+    <div className="flex h-[24rem] flex-col rounded-xl border border-border/60 bg-bg/40">
+      <div className="flex items-center justify-between border-b border-border/60 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+        <span>{heading}</span>
+        <span className="font-mono text-[10px] text-muted/70">{items.length}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         {items.length === 0 ? (

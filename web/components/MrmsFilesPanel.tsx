@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchMrmsFiles, type MrmsFileItem } from "@/lib/api";
+import { formatBytes, formatRelative } from "@/lib/format";
 
 import { Panel } from "./Panel";
 import { StatusDot } from "./StatusDot";
@@ -147,22 +148,25 @@ function Timeline({ items }: { items: MrmsFileItem[] }) {
   // Compute relative offsets so the most recent file pins to the right edge.
   const latest = new Date(items[0].validAt).getTime();
   const earliest = new Date(items[items.length - 1].validAt).getTime();
+  const hasRange = latest > earliest;
   const span = Math.max(latest - earliest, 1);
   return (
     <div className="rounded-xl border border-border/60 bg-bg/40 px-3 py-3">
-      <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted">
         <span>{new Date(earliest).toLocaleString()}</span>
-        <span>timeline · valid_at</span>
+        <span className="text-muted/70">
+          {hasRange ? "timeline · valid_at" : `single sample · valid_at`}
+        </span>
         <span>{new Date(latest).toLocaleString()}</span>
       </div>
-      <div className="relative h-10 w-full overflow-hidden rounded-md bg-border/30">
+      <div className="relative h-10 w-full rounded-md bg-border/30">
         {items.map((item) => {
           const t = new Date(item.validAt).getTime();
-          const offset = ((t - earliest) / span) * 100;
+          const offset = hasRange ? ((t - earliest) / span) * 100 : 50;
           return (
             <span
               key={item.key}
-              className="absolute top-1 h-8 w-[2px] bg-accent/70"
+              className="absolute top-1 h-8 w-[2px] -translate-x-1/2 rounded-sm bg-accent/70"
               style={{ left: `${offset}%` }}
               title={`${item.product} ${item.level} · ${new Date(item.validAt).toISOString()}`}
             />
@@ -236,21 +240,3 @@ function FilesTable({ items, stats }: { items: MrmsFileItem[]; stats: CatalogSta
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function formatRelative(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 0) return "future";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
-}

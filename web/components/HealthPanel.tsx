@@ -9,6 +9,7 @@ import {
   type Health,
   type Stats,
 } from "@/lib/api";
+import { formatRelative } from "@/lib/format";
 
 import { Panel } from "./Panel";
 import { StatusDot } from "./StatusDot";
@@ -152,12 +153,11 @@ function Stat({ label, value, mono = false, accent = false, tone }: StatProps) {
         ? "text-accent"
         : "text-text";
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1">
       <span className="text-[10px] uppercase tracking-wide text-muted">{label}</span>
       <span
         className={[
-          "truncate",
-          mono ? "font-mono text-[11px]" : "text-sm font-medium",
+          mono ? "break-all font-mono text-[11px] leading-tight" : "truncate text-sm font-medium",
           valueClass,
         ].join(" ")}
       >
@@ -165,13 +165,4 @@ function Stat({ label, value, mono = false, accent = false, tone }: StatProps) {
       </span>
     </div>
   );
-}
-
-function formatRelative(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 0) return `in ${Math.abs(seconds)}s`;
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
 }
