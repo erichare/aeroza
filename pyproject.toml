@@ -87,6 +87,10 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-redis>=4.6",
+    # `honcho` powers `make start` — runs the API + web + workers as one
+    # foreground process tree from `Procfile.dev`. Pure-Python, no system
+    # deps. Dev-only; nothing in production imports it.
+    "honcho>=2.0",
 ]
 
 [build-system]

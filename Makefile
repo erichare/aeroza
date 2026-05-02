@@ -1,7 +1,7 @@
-.PHONY: help install dev up down logs test test-unit test-integration test-cov \
+.PHONY: help doctor bootstrap start stop install dev up down logs test test-unit test-integration test-cov \
         lint format format-check typecheck check migrate migrate-down migration db-shell clean \
         web-install web-dev web-build web-typecheck \
-        ingest-alerts ingest-mrms materialise-mrms \
+        ingest-alerts ingest-mrms ingest-metar materialise-mrms \
         nowcast-pysteps nowcast-persistence
 
 UV ?= uv
@@ -12,6 +12,72 @@ TEST_DATABASE_URL ?= postgresql+asyncpg://aeroza:aeroza@localhost:5432/aeroza_te
 
 help:
 	@awk 'BEGIN {FS = ":.*##"; printf "Aeroza make targets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
+# --- One-command setup -----------------------------------------------------
+# `make start` is the friction-free path: doctor → bootstrap → run the
+# whole stack with honcho. `make stop` brings the docker layer down.
+# Power users can still drive each piece individually below.
+
+doctor: ## Pre-flight: check that uv, docker, node are installed
+	@missing=""; \
+	for cmd in uv docker node npm; do \
+		if ! command -v $$cmd >/dev/null 2>&1; then missing="$$missing $$cmd"; fi; \
+	done; \
+	if ! docker compose version >/dev/null 2>&1; then missing="$$missing docker-compose-plugin"; fi; \
+	if [ -n "$$missing" ]; then \
+		printf "\033[31mMissing tools:\033[0m%s\n\n" "$$missing"; \
+		printf "  uv      → https://docs.astral.sh/uv/\n"; \
+		printf "  docker  → https://docs.docker.com/get-docker/\n"; \
+		printf "  node    → https://nodejs.org/ (or nvm)\n"; \
+		exit 1; \
+	fi; \
+	printf "\033[32mAll required tools present.\033[0m\n"
+
+bootstrap: doctor ## First-run setup: .env, deps, infra, migrations (idempotent)
+	@if [ ! -f .env ]; then \
+		printf "Creating .env from .env.example…\n"; \
+		cp .env.example .env; \
+		salt=$$(python3 -c 'import secrets; print(secrets.token_hex(32))'); \
+		sed -e "s|AEROZA_API_KEY_SALT=.*|AEROZA_API_KEY_SALT=$$salt|" .env > .env.tmp && mv .env.tmp .env; \
+		printf "  → generated AEROZA_API_KEY_SALT\n"; \
+	fi
+	@if ! $(UV) run --quiet python -c "import alembic, fastapi, sqlalchemy, redis, nats" >/dev/null 2>&1; then \
+		printf "Syncing Python deps…\n"; \
+		$(UV) sync --quiet \
+			--extra db --extra cache --extra stream --extra ingest --extra verify; \
+	fi
+	@if [ ! -f node_modules/.package-lock.json ]; then \
+		printf "Installing web deps…\n"; \
+		npm install --silent; \
+	fi
+	@printf "Bringing up Postgres / Redis / NATS…\n"
+	@docker compose up -d
+	@printf "Waiting for Postgres to accept connections"
+	@for i in $$(seq 1 60); do \
+		if docker compose exec -T postgres pg_isready -U aeroza -q 2>/dev/null; then \
+			printf " ok\n"; break; \
+		fi; \
+		printf "."; sleep 1; \
+		if [ $$i -eq 60 ]; then printf "\n\033[31mPostgres did not become ready in 60s\033[0m\n"; exit 1; fi; \
+	done
+	@printf "Applying migrations…\n"
+	@$(UV) run --quiet alembic upgrade head
+	@printf "\n\033[32mReady.\033[0m Run \033[36mmake start\033[0m to launch the stack.\n"
+
+start: bootstrap ## Boot the whole stack (API + web + workers) in one terminal
+	@for port in 8000 3000; do \
+		if lsof -nP -iTCP:$$port -sTCP:LISTEN -t >/dev/null 2>&1; then \
+			pid=$$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t | head -1); \
+			printf "\033[31mPort %s is already in use (pid %s).\033[0m\n" "$$port" "$$pid"; \
+			printf "  Run \033[36mkill %s\033[0m or \033[36mmake stop\033[0m, then retry.\n" "$$pid"; \
+			exit 1; \
+		fi; \
+	done
+	@printf "\nStarting Aeroza dev stack — Ctrl+C stops everything.\n\n"
+	@$(UV) run honcho -f Procfile.dev start
+
+stop: ## Stop the docker compose stack (Postgres, Redis, NATS)
+	@docker compose down
 
 install: ## Sync Python dependencies via uv
 	$(UV) sync --all-extras
@@ -24,6 +90,9 @@ ingest-alerts: ## Long-running NWS alerts poller (run alongside `make dev`)
 
 ingest-mrms: ## Long-running MRMS file-catalog poller (run alongside `make dev`)
 	$(UV) run aeroza-ingest-mrms
+
+ingest-metar: ## Long-running METAR poller (run alongside `make dev`)
+	$(UV) run aeroza-ingest-metar
 
 materialise-mrms: ## Long-running MRMS Zarr materialiser (run alongside `make dev`)
 	$(UV) run aeroza-materialise-mrms

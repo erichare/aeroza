@@ -1,0 +1,25 @@
+# Aeroza dev stack — read by `make start` (honcho).
+#
+# Each line is `<name>: <command>`. honcho prefixes every line of output
+# with the process name so you can tell which worker said what. Ctrl+C
+# stops everything in one shot.
+#
+# Light services (no system deps) run by default. Heavy workers that
+# need optional extras are commented out — uncomment after installing
+# the right extra (see README "Optional extras").
+
+api:        uv run uvicorn aeroza.main:app --reload --host 0.0.0.0 --port 8000
+web:        npm --prefix web run dev
+alerts:     uv run aeroza-ingest-alerts
+mrms:       uv run aeroza-ingest-mrms
+metar:      uv run aeroza-ingest-metar
+webhooks:   uv run aeroza-dispatch-webhooks
+
+# --- Optional. Uncomment after `uv sync --extra grib`: ---
+# materialise: uv run aeroza-materialise-mrms
+
+# --- Optional. Uncomment after `uv sync --extra grib`: ---
+# verify:     uv run aeroza-verify-nowcasts
+
+# --- Optional. Uncomment after `uv sync --extra grib --extra nowcast`: ---
+# nowcast:    uv run aeroza-nowcast-mrms --algorithm persistence
