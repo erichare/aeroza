@@ -100,6 +100,7 @@ async def test_drive_once_invokes_poll_exactly_once(
     await materialise_mrms._drive(
         db=db_obj,  # type: ignore[arg-type]
         publisher=publisher,
+        subscriber=None,
         args=args,
     )
 
@@ -146,6 +147,7 @@ async def test_drive_loop_mode_stops_on_event(
     await materialise_mrms._drive(
         db=object(),  # type: ignore[arg-type]
         publisher=NullMrmsGridPublisher(),
+        subscriber=None,
         args=args,
     )
     assert tick_count["n"] >= 1
@@ -166,9 +168,16 @@ async def test_run_disposes_database_even_on_error(
 
         return _Stub()  # type: ignore[return-value]
 
-    async def fake_drive(*, db: Database, publisher: MrmsGridPublisher, args: Any) -> None:
+    async def fake_drive(
+        *,
+        db: Database,
+        publisher: MrmsGridPublisher,
+        subscriber: Any,
+        args: Any,
+    ) -> None:
         captured["drove"] = True
         captured["publisher_class"] = type(publisher).__name__
+        captured["subscriber"] = subscriber
 
     async def explode_nats(_servers: str) -> None:  # pragma: no cover — must NOT run
         raise AssertionError("nats_connection should not be entered with --no-publish")
@@ -205,6 +214,7 @@ async def test_drive_creates_target_root_if_missing(
     await materialise_mrms._drive(
         db=object(),  # type: ignore[arg-type]
         publisher=NullMrmsGridPublisher(),
+        subscriber=None,
         args=args,
     )
     assert target.is_dir()

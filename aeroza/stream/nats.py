@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, Final, Protocol
 
 import structlog
@@ -135,6 +136,22 @@ def _encode_mrms_file(file: MrmsFile) -> bytes:
     ).encode("utf-8")
 
 
+def _decode_mrms_file(data: bytes) -> MrmsFile:
+    """Reverse of :func:`_encode_mrms_file`. Raises ``ValueError`` on
+    malformed input — callers turn that into a "bad payload, skipping"
+    log entry rather than tearing the consumer down.
+    """
+    obj = json.loads(data)
+    return MrmsFile(
+        key=obj["key"],
+        product=obj["product"],
+        level=obj["level"],
+        valid_at=datetime.fromisoformat(obj["validAt"]),
+        size_bytes=int(obj.get("sizeBytes", 0)),
+        etag=obj.get("etag"),
+    )
+
+
 class NatsMrmsGridPublisher:
     """Publishes one NATS message per newly-materialised MRMS grid."""
 
@@ -218,6 +235,46 @@ class NatsAlertSubscriber:
         finally:
             await sub.unsubscribe()
             log.debug("nats.alerts.unsubscribe", subject=self._subject)
+
+
+class NatsMrmsFileSubscriber:
+    """Yields MRMS file events arriving on a NATS subject as they are published.
+
+    Mirror of :class:`NatsAlertSubscriber`. Each call opens an
+    independent subscription; malformed payloads are logged and skipped
+    so one bad publisher cannot tear the materialise worker down.
+    """
+
+    def __init__(
+        self,
+        client: NatsSubscriberClient,
+        *,
+        subject: str = MRMS_NEW_FILE_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def subscribe_new_files(self) -> AsyncIterator[MrmsFile]:
+        sub = await self._client.subscribe(self._subject)
+        log.debug("nats.mrms.subscribe", subject=self._subject)
+        try:
+            async for msg in sub.messages:
+                data: bytes = getattr(msg, "data", b"")
+                try:
+                    yield _decode_mrms_file(data)
+                except (ValueError, KeyError) as exc:
+                    log.warning(
+                        "nats.mrms.subscribe.bad_payload",
+                        subject=self._subject,
+                        error=str(exc),
+                    )
+        finally:
+            await sub.unsubscribe()
+            log.debug("nats.mrms.unsubscribe", subject=self._subject)
 
 
 @asynccontextmanager
