@@ -42,7 +42,8 @@ const FEATURES: ReadonlyArray<Feature> = [
 ];
 
 const CALLOUTS: ReadonlyArray<{ label: string; href: string; primary?: boolean }> = [
-  { label: "Open the dev console", href: "/console", primary: true },
+  { label: "View live map", href: "/map", primary: true },
+  { label: "Open the dev console", href: "/console" },
   { label: "Read the docs", href: "/docs" },
   { label: "OpenAPI schema", href: "/openapi.json" },
 ];
