@@ -69,6 +69,7 @@ verify = [
 
 [project.scripts]
 aeroza-ingest-alerts = "aeroza.cli.ingest_alerts:main"
+aeroza-ingest-metar = "aeroza.cli.ingest_metar:main"
 aeroza-ingest-mrms = "aeroza.cli.ingest_mrms:main"
 aeroza-materialise-mrms = "aeroza.cli.materialise_mrms:main"
 aeroza-nowcast-mrms = "aeroza.cli.nowcast_mrms:main"

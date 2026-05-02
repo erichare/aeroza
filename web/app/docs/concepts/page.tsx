@@ -175,6 +175,43 @@ export default function ConceptsPage() {
         kilobytes off Zarr instead of the full ~100 MB array.
       </p>
 
+      <h2>METAR (surface observations)</h2>
+      <p>
+        METAR is the global standard for hourly surface weather reporting
+        at airports. The <code>aeroza-ingest-metar</code> worker polls the
+        Aviation Weather Center JSON API for a configurable list of ICAO
+        stations (default: a CONUS top-20 sample) every 5 minutes. AWC
+        returns already-parsed records, so there is no in-tree METAR text
+        parser; the <code>rawText</code> column preserves the original
+        string for callers who want their own.
+      </p>
+      <p>
+        Each row is keyed on <code>(stationId, observationTime)</code> —
+        re-fetches that find no change are no-ops, and SPECI updates
+        within a cycle update the row in place. Measurement fields are
+        nullable (a station whose dewpoint sensor isn't reporting still
+        gets a row, just with <code>null</code> in those columns).
+      </p>
+      <ul>
+        <li>
+          <strong>List:</strong> <code>GET /v1/metar</code> — filter by{" "}
+          <code>station</code>, <code>since</code>/<code>until</code>,{" "}
+          <code>bbox</code> (same convention as <code>/v1/alerts</code>),
+          and <code>limit</code>. Newest first.
+        </li>
+        <li>
+          <strong>Latest:</strong>{" "}
+          <code>GET /v1/metar/{`{station}`}/latest</code> — most-recent
+          observation for one airport. Case-insensitive on the path.
+        </li>
+      </ul>
+      <p>
+        Useful as ground-truth point observations next to the MRMS gridded
+        products: sanity-check a nowcast at a specific airport, or join
+        METAR readings against forecast cells for station-resolved
+        verification.
+      </p>
+
       <h2>Nowcasts</h2>
       <p>
         For each newly-materialised observation grid, the{" "}
