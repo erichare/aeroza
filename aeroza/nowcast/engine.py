@@ -72,7 +72,16 @@ class Forecaster(Protocol):
         observation: xr.DataArray,
         observation_valid_at: datetime,
         horizons_minutes: Sequence[int],
+        history: Sequence[xr.DataArray] | None = None,
     ) -> Sequence[NowcastPrediction]:  # pragma: no cover - interface
+        """``history`` is an oldest→newest sequence of past observations.
+
+        Persistence ignores it. Optical-flow forecasters (pySTEPS,
+        NowcastNet) need a few past frames to compute motion. The
+        worker passes whatever history the catalog has at tick time;
+        an implementation is responsible for falling back gracefully
+        if the history is shorter than required.
+        """
         ...
 
 
@@ -98,7 +107,11 @@ class PersistenceForecaster:
         observation: xr.DataArray,
         observation_valid_at: datetime,
         horizons_minutes: Sequence[int],
+        history: Sequence[xr.DataArray] | None = None,
     ) -> Sequence[NowcastPrediction]:
+        # `history` is part of the Protocol signature so optical-flow
+        # forecasters can use it; persistence has no use for past frames.
+        del history
         predictions: list[NowcastPrediction] = []
         for horizon in horizons_minutes:
             valid_at = observation_valid_at + timedelta(minutes=horizon)

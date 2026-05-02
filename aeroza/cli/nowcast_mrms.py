@@ -23,7 +23,11 @@ from typing import Final
 import structlog
 
 from aeroza.config import Settings, get_settings
-from aeroza.nowcast.engine import DEFAULT_HORIZONS_MINUTES, PersistenceForecaster
+from aeroza.nowcast.engine import (
+    DEFAULT_HORIZONS_MINUTES,
+    Forecaster,
+    PersistenceForecaster,
+)
 from aeroza.nowcast.event_worker import run_event_triggered_nowcast
 from aeroza.shared.db import Database, create_engine_and_session
 from aeroza.stream.nats import (
@@ -75,6 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
             "backfills, schema migrations, environments without a broker."
         ),
     )
+    parser.add_argument(
+        "--algorithm",
+        choices=["persistence", "pysteps"],
+        default="persistence",
+        help=(
+            "Forecaster to run. 'persistence' (default) is the §7 baseline "
+            "and pulls in zero extra deps. 'pysteps' runs Lucas–Kanade "
+            "optical flow + semi-Lagrangian extrapolation; needs the "
+            "[nowcast] extra (`uv sync --extra nowcast`)."
+        ),
+    )
     return parser
 
 
@@ -93,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
     db = create_engine_and_session(settings.database_url)
+    forecaster = _build_forecaster(args.algorithm)
     try:
         if args.no_publish:
             # NATS-free path: still need the input subscriber, so keep
@@ -105,6 +121,7 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
                     horizons=tuple(args.horizons),
                     grid_sub=grid_sub,
                     publisher=NullNowcastGridPublisher(),
+                    forecaster=forecaster,
                 )
             return 0
 
@@ -117,10 +134,24 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
                 horizons=tuple(args.horizons),
                 grid_sub=grid_sub,
                 publisher=publisher,
+                forecaster=forecaster,
             )
         return 0
     finally:
         await db.dispose()
+
+
+def _build_forecaster(algorithm: str) -> Forecaster:
+    """Resolve the CLI ``--algorithm`` choice to a concrete forecaster."""
+    if algorithm == "persistence":
+        return PersistenceForecaster()
+    if algorithm == "pysteps":
+        # Lazy import — pysteps is in the [nowcast] extra and pulls
+        # scipy + skimage as transitive deps.
+        from aeroza.nowcast.pysteps_forecaster import PystepsForecaster
+
+        return PystepsForecaster()
+    raise ValueError(f"unknown algorithm: {algorithm!r}")
 
 
 async def _drive(
@@ -130,9 +161,9 @@ async def _drive(
     horizons: tuple[int, ...],
     grid_sub: NatsMrmsGridSubscriber,
     publisher: NatsNowcastGridPublisher | NullNowcastGridPublisher,
+    forecaster: Forecaster,
 ) -> None:
     Path(target_root).mkdir(parents=True, exist_ok=True)
-    forecaster = PersistenceForecaster()
 
     stopper = asyncio.Event()
     _install_signal_handlers(stopper)

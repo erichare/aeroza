@@ -186,8 +186,11 @@ export default function ConceptsPage() {
       </p>
       <ul>
         <li>
-          <code>algorithm</code> — which forecaster produced this row
-          (currently <code>persistence</code>; pySTEPS / NowcastNet later).
+          <code>algorithm</code> — which forecaster produced this row.
+          Two ship today: <code>persistence</code> (the §7 baseline) and{" "}
+          <code>pysteps</code> (Lucas–Kanade dense optical flow + semi-
+          Lagrangian extrapolation). NowcastNet / ensemble pySTEPS land
+          later.
         </li>
         <li>
           <code>forecastHorizonMinutes</code> — lead time. The (algorithm,
@@ -196,12 +199,16 @@ export default function ConceptsPage() {
         </li>
       </ul>
       <p>
-        The v1 algorithm is <strong>persistence</strong> — every prediction
-        is just the observation copied forward. That sounds trivial, and it
-        is, but it's also the documented baseline (§7 of the plan): real
-        nowcasting (pySTEPS, NowcastNet) wins by beating persistence at each
-        horizon. Persistence forecasts running from day one means the
-        verification pipeline produces real numbers from day one.
+        The two algorithms are <em>peers</em> on the calibration page —
+        their MAE / bias / RMSE rows trend side-by-side. Persistence is
+        the trivial copy-forward baseline; pySTEPS computes a velocity
+        field from the last few observations and advects the most
+        recent frame along it. Run pysteps with
+        {" "}<code>aeroza-nowcast-mrms --algorithm pysteps</code>{" "}
+        (the worker fetches a small lookback window per tick from the
+        catalog, so there's no separate state to manage). When the
+        catalog has fewer than the required past frames, pySTEPS falls
+        back to persistence rather than crashing.
       </p>
       <p>
         Newly-persisted nowcasts also publish{" "}

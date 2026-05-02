@@ -48,10 +48,18 @@ ingest = [
     "pillow>=11.0",
 ]
 # `nowcast` and `grib` carry heavy C-extension deps (pysteps needs OpenMP via
-# libomp; cfgrib needs eccodes). They are intentionally outside `--all-extras`
-# so day-zero contributors aren't blocked by system prerequisites. Phase 3 will
-# document the libomp/eccodes setup before wiring them in.
-nowcast = []
+# libomp on macOS; cfgrib needs eccodes). They are intentionally outside
+# `--all-extras` so day-zero contributors aren't blocked by system prereqs.
+# pySTEPS pulls scipy + scikit-image transitively; we list them explicitly so
+# `uv sync --extra nowcast` resolves to a known-good lockfile slice.
+nowcast = [
+    "pysteps>=1.10",
+    "scipy>=1.14",
+    "scikit-image>=0.24",
+    # pysteps' Lucas-Kanade flow uses cv2.morphologyEx — without opencv
+    # the call site raises MissingOptionalDependency.
+    "opencv-python-headless>=4.10",
+]
 grib = [
     "cfgrib>=0.9",
 ]
@@ -127,7 +135,15 @@ warn_return_any = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["shapely.*", "geoalchemy2.*", "boto3", "boto3.*", "botocore", "botocore.*"]
+module = [
+    "shapely.*",
+    "geoalchemy2.*",
+    "boto3",
+    "boto3.*",
+    "botocore",
+    "botocore.*",
+    "pysteps.*",
+]
 ignore_missing_imports = true
 
 # Additional stub-less modules will be added here as each gets wired in

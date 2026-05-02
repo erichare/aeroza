@@ -57,21 +57,21 @@ Public surface:
 
 Public-facing landing page (`/`), interactive `/map` (MapLibre raster basemap + alert GeoJSON polygons + MRMS reflectivity raster overlay + scrubbable 6-hour timeline), `/calibration` dashboard (matrix + per-row sparkline), warm parchment theme with Fraunces display serif, refreshed `/docs` hub, `@aeroza/sdk` TypeScript client (the dev console dogfoods it), Playwright E2E smoke for `/map`'s WebGL canvas, `make ingest-*` targets so day-zero contributors are one command from live data.
 
-## Up next (phase 6)
+### Phase 6a — pySTEPS nowcaster
 
-Three workstreams roughly equal in priority. Reordering to taste; nothing is locked in.
+`PystepsForecaster` runs Lucas–Kanade dense optical flow over the last `lookback` past observation grids (default 3) and semi-Lagrangian extrapolation forward at each requested horizon. Same `Forecaster` Protocol as `PersistenceForecaster`; opt in via `aeroza-nowcast-mrms --algorithm pysteps`.
 
-### Real nowcasting (pySTEPS)
+The worker fetches the past observations from the catalog as part of each tick (`find_recent_mrms_grids`) and passes them on the existing `forecast()` call. When the catalog has fewer past frames than `lookback`, the forecaster gracefully falls back to persistence — cold-start protection so the worker doesn't crash on its first ticks after a cold start.
 
-The §3.3 calibration moat is more interesting once a real algorithm beats persistence. pySTEPS is the obvious first non-trivial forecaster — Lagrangian extrapolation, S-PROG / STEPS modes, mature scientific lineage. Drop-in via the existing `Forecaster` Protocol; the verifier and calibration aggregates work unchanged.
+Install: `uv sync --extra nowcast` (Linux works out of the box; macOS needs `brew install libomp`, since pysteps' `setup.py` uses raw `-fopenmp`). Tests use `pytest.importorskip("pysteps")` so the rest of the suite stays green without the install.
 
-Open questions:
+## Up next (phase 6 continued)
 
-- libomp / OpenMP install pain on macOS — same pattern we used for `eccodes` should work.
-- Zarr → numpy → pysteps array conversion: pysteps wants `(time, y, x)` and we have `(latitude, longitude)` — minor adapter.
-- Output cadence: pysteps wants a sequence of past observations, not just one. The worker's tick needs a small lookback fetch.
+Workstreams roughly equal in priority. Reordering to taste; nothing is locked in.
 
-Once pySTEPS is in, ensemble runs unlock Brier scores + CRPS in `verify/`, which makes the calibration page interesting enough to ship publicly.
+### Ensemble forecasting → Brier / CRPS
+
+Now that we have a real algorithm in the pipeline, the next step on the verification side is multi-member ensemble runs (pysteps' STEPS mode supports them out of the box). Ensemble output unlocks proper probabilistic verification: Brier scores, reliability diagrams, CRPS — the trust signal Phase 3's calibration dashboard was originally pointed at. Goes hand-in-hand with a "champion / challenger" mechanism that calibrates new algorithms against persistence before promoting them.
 
 ### Auth + API keys
 
