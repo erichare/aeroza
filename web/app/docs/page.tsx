@@ -39,10 +39,14 @@ export default function DocsIndexPage() {
 
       <h2>What's not here yet</h2>
       <p>
-        Docs for the TypeScript SDK (<code>@aeroza/sdk</code>) and probabilistic
-        nowcasting (Phase 3) are coming. Anything you don't see covered here
-        is still being built; the running FastAPI is the source of truth in
-        the meantime.
+        A dedicated SDK reference for <code>@aeroza/sdk</code> (with
+        per-method docs and tree-shake hints) is the next doc to land. Until
+        then, the SDK source is small enough to read end-to-end and the
+        running FastAPI's Swagger UI at{" "}
+        <a href="http://localhost:8000/docs" target="_blank" rel="noreferrer">
+          /docs
+        </a>{" "}
+        is the source of truth for every wire shape.
       </p>
     </DocsLayout>
   );
