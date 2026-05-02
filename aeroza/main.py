@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from aeroza import __version__
+from aeroza.auth.routes import router as auth_router
 from aeroza.config import Settings, get_settings
 from aeroza.query.v1 import router as v1_router
 from aeroza.shared.db import create_engine_and_session
@@ -108,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_router)
     app.include_router(webhooks_router)
     app.include_router(alert_rules_router)
+    app.include_router(auth_router)
     return app
 
 

@@ -24,6 +24,7 @@ import type {
   CalibrationResponse,
   CalibrationSeriesQuery,
   CalibrationSeriesResponse,
+  Me,
   WebhookSubscriptionList,
   WebhookSubscriptionQuery,
   Health,
@@ -48,8 +49,17 @@ export interface AeroaClientOptions {
    */
   fetch?: typeof globalThis.fetch;
   /**
-   * Optional headers merged into every request. Use for telemetry, auth
-   * tokens (once auth is wired), or `Accept-Language`.
+   * Optional bearer-token API key (an `aza_live_*` string from
+   * `aeroza-api-keys create`). When set, the client adds
+   * `Authorization: Bearer <token>` to every request. Anonymous traffic
+   * is still allowed by default on the server; set this once routes
+   * require auth.
+   */
+  apiKey?: string;
+  /**
+   * Optional headers merged into every request. Use for telemetry,
+   * `Accept-Language`, or any custom header that isn't covered by
+   * `apiKey`.
    */
   defaultHeaders?: Record<string, string>;
 }
@@ -79,7 +89,11 @@ export class AeroaClient {
   constructor(options: AeroaClientOptions) {
     this.apiBase = stripTrailingSlashes(options.apiBase);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
-    this.defaultHeaders = options.defaultHeaders ?? {};
+    const headers: Record<string, string> = { ...(options.defaultHeaders ?? {}) };
+    if (options.apiKey) {
+      headers.Authorization = `Bearer ${options.apiKey}`;
+    }
+    this.defaultHeaders = headers;
   }
 
   // -------------------------------------------------------------------------
@@ -91,6 +105,14 @@ export class AeroaClient {
 
   async getStats(): Promise<Stats> {
     return this.getJson<Stats>("/v1/stats");
+  }
+
+  /**
+   * Introspect the calling API key. Requires `apiKey` to be set on
+   * the client; raises 401 otherwise.
+   */
+  async getMe(): Promise<Me> {
+    return this.getJson<Me>("/v1/me");
   }
 
   // -------------------------------------------------------------------------

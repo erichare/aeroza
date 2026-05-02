@@ -50,6 +50,7 @@ export type {
   WebhookSubscriptionRedacted,
   GeoJsonGeometry,
   Health,
+  Me,
   MrmsFileItem,
   MrmsFileList,
   MrmsGridItem,
