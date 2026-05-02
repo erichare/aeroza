@@ -25,7 +25,8 @@ LIST_ROUTE: str = "/v1/webhooks"
 async def _truncate_after(integration_db: Database) -> Any:
     yield
     async with integration_db.sessionmaker() as session:
-        await session.execute(text("TRUNCATE TABLE webhook_subscriptions"))
+        # CASCADE because ``alert_rules`` (PR #5) FKs to this table.
+        await session.execute(text("TRUNCATE TABLE webhook_subscriptions CASCADE"))
         await session.commit()
 
 
