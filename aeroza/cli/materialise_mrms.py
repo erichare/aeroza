@@ -28,6 +28,8 @@ from aeroza.ingest._aws import open_data_s3_client
 from aeroza.ingest.mrms_materialise_poll import materialise_unmaterialised_once
 from aeroza.ingest.scheduler import IntervalLoop
 from aeroza.shared.db import Database, create_engine_and_session
+from aeroza.stream.nats import NatsMrmsGridPublisher, nats_connection
+from aeroza.stream.publisher import MrmsGridPublisher, NullMrmsGridPublisher
 
 log = structlog.get_logger(__name__)
 
@@ -85,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run a single tick and exit (cron-friendly).",
     )
+    parser.add_argument(
+        "--no-publish",
+        action="store_true",
+        help=(
+            "Materialise but do not publish — backfills, schema migrations, "
+            "or environments without a NATS broker."
+        ),
+    )
     return parser
 
 
@@ -99,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         target_root=args.target_root,
         once=args.once,
+        publish=not args.no_publish,
         env=settings.env,
     )
     return asyncio.run(_run(args=args, settings=settings))
@@ -107,13 +118,24 @@ def main(argv: list[str] | None = None) -> int:
 async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
     db = create_engine_and_session(settings.database_url)
     try:
-        await _drive(db=db, args=args)
+        if args.no_publish:
+            await _drive(db=db, publisher=NullMrmsGridPublisher(), args=args)
+            return 0
+
+        async with nats_connection(settings.nats_url) as nats_client:
+            publisher = NatsMrmsGridPublisher(nats_client)
+            await _drive(db=db, publisher=publisher, args=args)
         return 0
     finally:
         await db.dispose()
 
 
-async def _drive(*, db: Database, args: argparse.Namespace) -> None:
+async def _drive(
+    *,
+    db: Database,
+    publisher: MrmsGridPublisher,
+    args: argparse.Namespace,
+) -> None:
     target_root = Path(args.target_root)
     target_root.mkdir(parents=True, exist_ok=True)
     s3_client = open_data_s3_client()
@@ -126,6 +148,7 @@ async def _drive(*, db: Database, args: argparse.Namespace) -> None:
             product=args.product,
             level=args.level,
             batch_size=args.batch_size,
+            publisher=publisher,
         )
 
     if args.once:

@@ -5,7 +5,7 @@ A minimal Next.js 15 app that visualises the Aeroza FastAPI surface. Four panels
 - **Alerts · live stream** — `/v1/alerts/stream` (SSE) plus a polled `/v1/alerts` list.
 - **MRMS · file catalog** — `/v1/mrms/files` with a sliver-timeline of `valid_at` and per-row stats.
 - **MRMS · materialised grids** — `/v1/mrms/grids` with locator metadata (variable, shape, dtype, Zarr URI).
-- **System · health** — `/health` polled every 10 s.
+- **System · health & stats** — `/health` + `/v1/stats` polled every 10 s: alerts active/total, MRMS files vs grids materialised, freshness watermarks.
 
 This is the dev/demo client. The polished Phase 5 reference web app
 (MapLibre + scrubbable timeline + landing page) will replace it later.

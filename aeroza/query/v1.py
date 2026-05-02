@@ -15,6 +15,9 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   decoded and queryable right now") populated by the
   ``aeroza-materialise-mrms`` worker.
 - ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
+- ``GET /v1/stats`` — compact health-style snapshot of how much data the
+  system currently knows about (alerts active/total, MRMS files,
+  materialised grids, and freshness watermarks).
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
@@ -24,7 +27,7 @@ matcher.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 import structlog
@@ -75,6 +78,7 @@ from aeroza.query.schemas import (
     alert_view_to_detail_feature,
     alert_view_to_feature,
 )
+from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
 
 log = structlog.get_logger(__name__)
 
@@ -368,3 +372,26 @@ async def get_mrms_grid_route(
             detail=f"no materialised grid for file_key {file_key!r}",
         )
     return mrms_grid_view_to_item(view)
+
+
+@router.get(
+    "/stats",
+    response_model=Stats,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["meta"],
+    summary="Live system stats: alerts + MRMS counts and freshness",
+    description=(
+        "Compact 'what does the system know right now?' snapshot. Cheap "
+        "aggregate counts (alerts active/total, MRMS files vs grids "
+        "materialised) plus the latest ``valid_at`` and ``materialised_at`` "
+        "timestamps so callers can confirm data is flowing without scanning "
+        "the catalogs themselves."
+    ),
+)
+async def get_stats_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Stats:
+    now = datetime.now(UTC)
+    view = await compute_stats(session, now=now)
+    return stats_view_to_model(view, generated_at=now)
