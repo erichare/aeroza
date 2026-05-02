@@ -11,6 +11,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The `@aeroza/sdk` workspace ships as TypeScript source (no build step
+  // yet). Next can transpile it on the fly when listed here.
+  transpilePackages: ["@aeroza/sdk"],
   env: {
     NEXT_PUBLIC_AEROZA_API_URL:
       process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000",

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { API_BASE, type AlertProperties } from "./api";
+import { alertsStreamUrl, type AlertProperties } from "./api";
 
 export type ConnectionState = "connecting" | "open" | "error" | "closed";
 
@@ -41,7 +41,7 @@ export function useAlertStream(): UseAlertStream {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
-    const url = `${API_BASE}/v1/alerts/stream`;
+    const url = alertsStreamUrl();
     let cancelled = false;
     const source = new EventSource(url);
     sourceRef.current = source;
