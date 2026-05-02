@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from aeroza.ingest.nws_alerts import Severity, severities_at_least, severity_rank
-from aeroza.query.parsers import parse_bbox, parse_point
+from aeroza.query.parsers import parse_bbox, parse_point, parse_polygon
 from aeroza.shared.types import BoundingBox, Coordinate
 
 
@@ -123,3 +123,56 @@ class TestParseBbox:
         with pytest.raises(HTTPException) as exc:
             parse_bbox("-200,0,-180,10")
         assert exc.value.status_code == 400
+
+
+@pytest.mark.unit
+class TestParsePolygon:
+    def test_returns_none_for_none_input(self) -> None:
+        assert parse_polygon(None) is None
+
+    def test_parses_triangle(self) -> None:
+        result = parse_polygon("-95.7,29.5,-95.0,29.5,-95.0,30.0")
+        assert result == ((-95.7, 29.5), (-95.0, 29.5), (-95.0, 30.0))
+
+    def test_parses_open_quad(self) -> None:
+        """Closure is implicit; the parser does not auto-add a vertex."""
+        result = parse_polygon("-95.7,29.5,-95.0,29.5,-95.0,30.0,-95.7,30.0")
+        assert result is not None
+        assert len(result) == 4
+
+    def test_tolerates_trailing_separator(self) -> None:
+        result = parse_polygon("-95.7,29.5,-95.0,29.5,-95.0,30.0,")
+        assert result == ((-95.7, 29.5), (-95.0, 29.5), (-95.0, 30.0))
+
+    @pytest.mark.parametrize("raw", ["1,2,3", "1,2,3,4,5"])
+    def test_rejects_odd_number_of_components(self, raw: str) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_polygon(raw)
+        assert exc.value.status_code == 400
+        assert "lng,lat" in str(exc.value.detail)
+
+    def test_rejects_too_few_vertices(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_polygon("-95.7,29.5,-95.0,29.5")
+        assert exc.value.status_code == 400
+        assert "at least 3" in str(exc.value.detail)
+
+    def test_rejects_non_numeric(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_polygon("a,b,c,d,e,f")
+        assert exc.value.status_code == 400
+        assert "numeric" in str(exc.value.detail)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "200,0,-180,0,-180,10",  # lng > 180
+            "0,91,0,-10,10,0",  # lat > 90
+            "-181,0,0,0,0,10",  # lng < -180
+        ],
+    )
+    def test_rejects_out_of_range_vertex(self, raw: str) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_polygon(raw)
+        assert exc.value.status_code == 400
+        assert "out of WGS84 range" in str(exc.value.detail)
