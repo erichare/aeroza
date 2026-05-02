@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Iterable
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -50,6 +50,21 @@ class MrmsGridSubscriber(Protocol):
     def subscribe_new_grids(
         self,
     ) -> AsyncIterator[MrmsGridLocator]:  # pragma: no cover - interface
+        ...
+
+
+class NowcastGridSubscriber(Protocol):
+    """Yields newly-persisted nowcast envelopes as they arrive.
+
+    The wire payload is a plain dict (the JSON the NATS publisher
+    emits) rather than a typed object — there's no symmetric
+    ``NowcastLocator`` value type, and the dispatcher's only consumer
+    relays the dict into a webhook payload as-is.
+    """
+
+    def subscribe_new_nowcasts(
+        self,
+    ) -> AsyncIterator[dict[str, Any]]:  # pragma: no cover - interface
         ...
 
 
@@ -196,6 +211,54 @@ class InMemoryMrmsGridSubscriber:
         queue: asyncio.Queue[MrmsGridLocator | None] = asyncio.Queue()
         for locator in self._initial:
             await queue.put(locator)
+        self._queues.append(queue)
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                yield item
+        finally:
+            if queue in self._queues:
+                self._queues.remove(queue)
+
+
+class InMemoryNowcastGridSubscriber:
+    """In-process queue of nowcast envelopes (dicts). Test-only.
+
+    Same shape as the other in-memory subscribers; the payload is a
+    plain dict because that's what the wire produces.
+    """
+
+    def __init__(self, initial: Iterable[dict[str, Any]] = ()) -> None:
+        self._initial = tuple(initial)
+        self._queues: list[asyncio.Queue[dict[str, Any] | None]] = []
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._queues)
+
+    async def push(self, envelope: dict[str, Any]) -> None:
+        for queue in self._queues:
+            await queue.put(envelope)
+
+    async def close(self) -> None:
+        for queue in self._queues:
+            await queue.put(None)
+
+    async def wait_for_subscriber_count(self, count: int = 1, *, timeout: float = 1.0) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self.subscriber_count < count:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(
+                    f"only {self.subscriber_count} subscriber(s) after {timeout}s, expected {count}"
+                )
+            await asyncio.sleep(0)
+
+    async def subscribe_new_nowcasts(self) -> AsyncIterator[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        for envelope in self._initial:
+            await queue.put(envelope)
         self._queues.append(queue)
         try:
             while True:

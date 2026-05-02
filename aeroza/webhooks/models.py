@@ -37,6 +37,7 @@ WEBHOOK_EVENT_TYPES: Final[tuple[str, ...]] = (
     "aeroza.alerts.nws.new",
     "aeroza.mrms.files.new",
     "aeroza.mrms.grids.new",
+    "aeroza.nowcast.grids.new",
 )
 
 

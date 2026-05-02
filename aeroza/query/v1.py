@@ -23,6 +23,12 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   block for "is anything intense enough inside this region right now?"
   alerting / geofencing.
 - ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
+- ``GET /v1/nowcasts`` — predicted-grid catalog populated by the
+  ``aeroza-nowcast-mrms`` worker. Each row is one (algorithm, horizon)
+  forecast derived from an observation grid.
+- ``GET /v1/calibration`` — aggregate verification metrics (MAE / bias
+  / RMSE) over a time window, grouped by algorithm × horizon. The
+  public face of the §3.3 moat.
 - ``GET /v1/stats`` — compact health-style snapshot of how much data the
   system currently knows about (alerts active/total, MRMS files,
   materialised grids, and freshness watermarks).
@@ -36,7 +42,7 @@ matcher. Same for ``/mrms/grids/sample`` and ``/mrms/grids/polygon`` vs
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import structlog
@@ -92,6 +98,17 @@ from aeroza.query.mrms_sample import (
     sample_grid_at_point,
     sample_grid_in_polygon,
 )
+from aeroza.query.nowcasts import (
+    DEFAULT_LIMIT as NOWCASTS_DEFAULT_LIMIT,
+)
+from aeroza.query.nowcasts import (
+    MAX_LIMIT as NOWCASTS_MAX_LIMIT,
+)
+from aeroza.query.nowcasts import (
+    NowcastList,
+    find_nowcasts,
+    nowcast_view_to_item,
+)
 from aeroza.query.parsers import parse_bbox, parse_point, parse_polygon
 from aeroza.query.schemas import (
     AlertDetailFeature,
@@ -100,6 +117,14 @@ from aeroza.query.schemas import (
     alert_view_to_feature,
 )
 from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
+from aeroza.verify.schemas import (
+    CalibrationResponse,
+    calibration_buckets_to_response,
+)
+from aeroza.verify.store import (
+    DEFAULT_AGGREGATE_WINDOW_HOURS as CALIBRATION_DEFAULT_WINDOW_HOURS,
+)
+from aeroza.verify.store import aggregate_calibration
 
 log = structlog.get_logger(__name__)
 
@@ -644,6 +669,78 @@ async def get_mrms_grid_route(
 
 
 @router.get(
+    "/nowcasts",
+    response_model=NowcastList,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["nowcasts"],
+    summary="List nowcasts (predicted grids)",
+    description=(
+        "Returns the most-recent rows of the nowcast catalog populated by "
+        "the ``aeroza-nowcast-mrms`` worker. Each row is one (algorithm, "
+        "horizon) prediction derived from a source observation grid. "
+        "Filters: ``product``, ``level``, ``algorithm`` (e.g. "
+        "``persistence``), ``horizon_minutes``, and a half-open "
+        "``[since, until)`` window on ``valid_at``."
+    ),
+)
+async def list_nowcasts_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    product: Annotated[
+        str | None,
+        Query(description="Filter to a single product (e.g. 'MergedReflectivityComposite')"),
+    ] = None,
+    level: Annotated[
+        str | None,
+        Query(description="Filter to a single product level (e.g. '00.50')"),
+    ] = None,
+    algorithm: Annotated[
+        str | None,
+        Query(description="Filter to one algorithm tag (e.g. 'persistence', 'pysteps')"),
+    ] = None,
+    horizon_minutes: Annotated[
+        int | None,
+        Query(
+            alias="horizonMinutes",
+            description="Filter to one forecast horizon (e.g. 10, 30, 60).",
+        ),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(description="Inclusive lower bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(description="Exclusive upper bound on valid_at (ISO-8601 timestamp)"),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=NOWCASTS_MAX_LIMIT,
+            description=f"Max results to return (default {NOWCASTS_DEFAULT_LIMIT})",
+        ),
+    ] = NOWCASTS_DEFAULT_LIMIT,
+) -> NowcastList:
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="since must be strictly before until",
+        )
+    views = await find_nowcasts(
+        session,
+        product=product,
+        level=level,
+        algorithm=algorithm,
+        horizon_minutes=horizon_minutes,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    return NowcastList(items=[nowcast_view_to_item(v) for v in views])
+
+
+@router.get(
     "/stats",
     response_model=Stats,
     response_model_by_alias=True,
@@ -664,3 +761,62 @@ async def get_stats_route(
     now = datetime.now(UTC)
     view = await compute_stats(session, now=now)
     return stats_view_to_model(view, generated_at=now)
+
+
+@router.get(
+    "/calibration",
+    response_model=CalibrationResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["calibration"],
+    summary="Aggregate verification metrics, grouped by algorithm × horizon",
+    description=(
+        "Returns sample-weighted MAE / bias / RMSE for every "
+        "(algorithm, forecastHorizonMinutes) pair that has scored "
+        "verifications inside the requested window. The public face of "
+        "the §3.3 calibration moat — point a chart at this and you can "
+        "watch a real algorithm pull ahead of the persistence baseline.\n\n"
+        "Window defaults to the last 24h. Pass ``windowHours`` to widen "
+        "or narrow it; pass ``algorithm`` / ``product`` / ``level`` to "
+        "scope the aggregation."
+    ),
+)
+async def get_calibration_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    window_hours: Annotated[
+        int,
+        Query(
+            alias="windowHours",
+            ge=1,
+            le=24 * 30,  # 30 days
+            description=(f"Lookback window in hours (default {CALIBRATION_DEFAULT_WINDOW_HOURS})."),
+        ),
+    ] = CALIBRATION_DEFAULT_WINDOW_HOURS,
+    algorithm: Annotated[
+        str | None,
+        Query(description="Filter to one algorithm tag (e.g. 'persistence')"),
+    ] = None,
+    product: Annotated[
+        str | None,
+        Query(description="Filter to one product (e.g. 'MergedReflectivityComposite')"),
+    ] = None,
+    level: Annotated[
+        str | None,
+        Query(description="Filter to one product level (e.g. '00.50')"),
+    ] = None,
+) -> CalibrationResponse:
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=window_hours)
+    buckets = await aggregate_calibration(
+        session,
+        since=since,
+        algorithm=algorithm,
+        product=product,
+        level=level,
+        window_hours=window_hours,
+    )
+    return calibration_buckets_to_response(
+        list(buckets),
+        generated_at=now,
+        window_hours=window_hours,
+    )

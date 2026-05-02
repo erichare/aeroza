@@ -15,13 +15,16 @@ Each domain ships three implementations:
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
 from aeroza.ingest.mrms import MrmsFile
 from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.ingest.nws_alerts import Alert
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from aeroza.nowcast.models import NowcastRow
 
 log = structlog.get_logger(__name__)
 
@@ -149,6 +152,47 @@ class InMemoryMrmsGridPublisher:
 
     async def publish_new_grid(self, locator: MrmsGridLocator) -> None:
         self._published.append(locator)
+
+    def clear(self) -> None:
+        self._published.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Nowcast grids                                                                #
+# --------------------------------------------------------------------------- #
+
+
+class NowcastGridPublisher(Protocol):
+    """Emits one event per newly-persisted nowcast row.
+
+    Same fan-out semantic as :class:`MrmsGridPublisher` — the
+    dispatcher worker (Phase 4) consumes these to drive webhook
+    delivery for the ``aeroza.nowcast.grids.new`` subject.
+    """
+
+    async def publish_new_nowcast(self, row: NowcastRow) -> None:  # pragma: no cover - interface
+        ...
+
+
+class NullNowcastGridPublisher:
+    """Drops every event."""
+
+    async def publish_new_nowcast(self, row: NowcastRow) -> None:
+        log.debug("publisher.null.drop", nowcast_id=str(row.id))
+
+
+class InMemoryNowcastGridPublisher:
+    """Captures published nowcast rows in a list — for tests only."""
+
+    def __init__(self) -> None:
+        self._published: list[NowcastRow] = []
+
+    @property
+    def published(self) -> tuple[NowcastRow, ...]:
+        return tuple(self._published)
+
+    async def publish_new_nowcast(self, row: NowcastRow) -> None:
+        self._published.append(row)
 
     def clear(self) -> None:
         self._published.clear()

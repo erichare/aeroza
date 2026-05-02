@@ -101,6 +101,27 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
       },
     ],
   },
+  {
+    section: "Nowcasts & calibration",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/nowcasts",
+        summary: "Predicted-grid catalog (algorithm × forecast horizon).",
+        notes:
+          "Filter by product, level, algorithm (e.g. 'persistence'), " +
+          "horizonMinutes, and a [since, until) window on validAt.",
+      },
+      {
+        method: "GET",
+        path: "/v1/calibration",
+        summary: "Aggregate verification metrics, grouped by algorithm × horizon.",
+        notes:
+          "Sample-weighted MAE / bias / RMSE over the window. Default " +
+          "windowHours=24; supports algorithm / product / level filters.",
+      },
+    ],
+  },
 ];
 
 export default function ApiReferencePage() {

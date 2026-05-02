@@ -162,6 +162,95 @@ export default function ConceptsPage() {
         kilobytes off Zarr instead of the full ~100 MB array.
       </p>
 
+      <h2>Nowcasts</h2>
+      <p>
+        For each newly-materialised observation grid, the{" "}
+        <code>aeroza-nowcast-mrms</code> worker generates predicted grids at
+        10, 30, and 60-minute horizons and persists them to{" "}
+        <code>mrms_nowcasts</code>. The catalog surface is{" "}
+        <code>GET /v1/nowcasts</code> — same shape as{" "}
+        <code>/v1/mrms/grids</code> with two extra columns:
+      </p>
+      <ul>
+        <li>
+          <code>algorithm</code> — which forecaster produced this row
+          (currently <code>persistence</code>; pySTEPS / NowcastNet later).
+        </li>
+        <li>
+          <code>forecastHorizonMinutes</code> — lead time. The (algorithm,
+          horizon) pair is the dimension we report verification numbers
+          against.
+        </li>
+      </ul>
+      <p>
+        The v1 algorithm is <strong>persistence</strong> — every prediction
+        is just the observation copied forward. That sounds trivial, and it
+        is, but it's also the documented baseline (§7 of the plan): real
+        nowcasting (pySTEPS, NowcastNet) wins by beating persistence at each
+        horizon. Persistence forecasts running from day one means the
+        verification pipeline produces real numbers from day one.
+      </p>
+      <p>
+        Newly-persisted nowcasts also publish{" "}
+        <code>aeroza.nowcast.grids.new</code> on NATS. Webhook subscriptions
+        that include this event in their <code>events</code> array receive a
+        signed delivery per persisted forecast.
+      </p>
+
+      <h2>Calibration — the moat</h2>
+      <p>
+        The <code>aeroza-verify-nowcasts</code> worker scores every
+        previously-issued forecast against the real observation that arrives
+        at its <code>validAt</code>. Per-(forecast, observation) MAE / bias /
+        RMSE rows live in <code>nowcast_verifications</code>;{" "}
+        <code>GET /v1/calibration</code> aggregates them by algorithm ×
+        horizon over a window:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Reads as</th>
+            <th>What it tells you</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>maeMean</code></td>
+            <td>Mean absolute error (dBZ)</td>
+            <td>How far off, on average, ignoring direction</td>
+          </tr>
+          <tr>
+            <td><code>biasMean</code></td>
+            <td>Mean signed error (dBZ)</td>
+            <td>Whether the algorithm runs hot or cold on average</td>
+          </tr>
+          <tr>
+            <td><code>rmseMean</code></td>
+            <td>Root-mean-square error (dBZ)</td>
+            <td>Like MAE but penalises big misses harder</td>
+          </tr>
+          <tr>
+            <td><code>sampleCount</code></td>
+            <td>Cells contributing to the means</td>
+            <td>The denominator — small numbers mean noisy aggregates</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Means are <strong>sample-weighted</strong>: a verification with 1M
+        cells contributes 1M times to the bucket. Small windows of bad
+        weather shouldn't dominate the average just because they're more
+        frequent.
+      </p>
+      <p>
+        Per the plan §3.3, calibration is the <em>trust</em> signal nobody
+        else in the dev-API weather space publishes. Brier scores and
+        reliability diagrams (probabilistic forecasts) land once we have an
+        ensemble forecaster; for now MAE / bias / RMSE on the persistence
+        baseline is honest enough to point a chart at.
+      </p>
+
       <h2>Stats snapshot</h2>
       <p>
         <code>GET /v1/stats</code> is a compact "what does the system know

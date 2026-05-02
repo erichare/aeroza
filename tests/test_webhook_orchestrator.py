@@ -32,6 +32,7 @@ from aeroza.stream.subscriber import (
     InMemoryAlertSubscriber,
     InMemoryMrmsFileSubscriber,
     InMemoryMrmsGridSubscriber,
+    InMemoryNowcastGridSubscriber,
 )
 from aeroza.webhooks.orchestrator import (
     RULE_FIRED_EVENT,
@@ -186,6 +187,7 @@ async def test_alert_event_fans_out_to_subscribed_subscriptions(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
     transport = CapturingTransport()
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -196,11 +198,13 @@ async def test_alert_event_fans_out_to_subscribed_subscriptions(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await alert_sub.wait_for_subscriber_count(1)
         await file_sub.wait_for_subscriber_count(1)
         await grid_sub.wait_for_subscriber_count(1)
+        await nowcast_sub.wait_for_subscriber_count(1)
 
         await alert_sub.push(
             Alert.model_validate({"id": "urn:1", "event": "Severe Thunderstorm Warning"})
@@ -209,6 +213,7 @@ async def test_alert_event_fans_out_to_subscribed_subscriptions(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=2.0)
 
     # Only `a` (subscribed to alerts) received a POST.
@@ -249,6 +254,7 @@ async def test_paused_subscription_is_skipped(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
     transport = CapturingTransport()
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -259,6 +265,7 @@ async def test_paused_subscription_is_skipped(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await alert_sub.wait_for_subscriber_count(1)
@@ -267,6 +274,7 @@ async def test_paused_subscription_is_skipped(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=2.0)
 
     assert transport.requests == []
@@ -303,6 +311,7 @@ async def test_grid_event_fires_rule_and_posts_to_bound_subscription(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
     transport = CapturingTransport()
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -313,6 +322,7 @@ async def test_grid_event_fires_rule_and_posts_to_bound_subscription(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await grid_sub.wait_for_subscriber_count(1)
@@ -321,6 +331,7 @@ async def test_grid_event_fires_rule_and_posts_to_bound_subscription(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=3.0)
 
     # Two POSTs: one raw fan-out for `aeroza.mrms.grids.new` (sub
@@ -386,6 +397,7 @@ async def test_rule_does_not_re_fire_while_already_firing(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
     transport = CapturingTransport()
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -396,6 +408,7 @@ async def test_rule_does_not_re_fire_while_already_firing(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await grid_sub.wait_for_subscriber_count(1)
@@ -406,6 +419,7 @@ async def test_rule_does_not_re_fire_while_already_firing(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=3.0)
 
     # Exactly one rule-fired POST — predicate stayed true so no
@@ -448,6 +462,7 @@ async def test_rule_re_fires_after_predicate_drops_then_recovers(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
     transport = CapturingTransport()
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -458,6 +473,7 @@ async def test_rule_re_fires_after_predicate_drops_then_recovers(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await grid_sub.wait_for_subscriber_count(1)
@@ -467,6 +483,7 @@ async def test_rule_re_fires_after_predicate_drops_then_recovers(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=3.0)
 
     rule_fired_posts = [
@@ -488,6 +505,7 @@ async def test_consecutive_terminal_failures_disable_the_subscription(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
 
     async with httpx.AsyncClient(transport=transport) as client:
         runner = asyncio.create_task(
@@ -497,6 +515,7 @@ async def test_consecutive_terminal_failures_disable_the_subscription(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
                 auto_disable_threshold=3,
             )
         )
@@ -507,6 +526,7 @@ async def test_consecutive_terminal_failures_disable_the_subscription(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=3.0)
 
     async with integration_db.sessionmaker() as fresh:
@@ -524,6 +544,7 @@ async def test_terminal_failures_below_threshold_do_not_disable(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
 
     async with httpx.AsyncClient(transport=transport) as client:
         runner = asyncio.create_task(
@@ -533,6 +554,7 @@ async def test_terminal_failures_below_threshold_do_not_disable(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
                 auto_disable_threshold=5,
             )
         )
@@ -543,6 +565,7 @@ async def test_terminal_failures_below_threshold_do_not_disable(
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=3.0)
 
     async with integration_db.sessionmaker() as fresh:
@@ -561,6 +584,7 @@ async def test_dispatcher_exits_when_subscribers_close(
     alert_sub = InMemoryAlertSubscriber()
     file_sub = InMemoryMrmsFileSubscriber()
     grid_sub = InMemoryMrmsGridSubscriber()
+    nowcast_sub = InMemoryNowcastGridSubscriber()
 
     async with httpx.AsyncClient() as client:
         runner = asyncio.create_task(
@@ -570,13 +594,16 @@ async def test_dispatcher_exits_when_subscribers_close(
                 alert_subscriber=alert_sub,
                 file_subscriber=file_sub,
                 grid_subscriber=grid_sub,
+                nowcast_subscriber=nowcast_sub,
             )
         )
         await alert_sub.wait_for_subscriber_count(1)
         await file_sub.wait_for_subscriber_count(1)
         await grid_sub.wait_for_subscriber_count(1)
+        await nowcast_sub.wait_for_subscriber_count(1)
         await alert_sub.close()
         await file_sub.close()
         await grid_sub.close()
+        await nowcast_sub.close()
         await asyncio.wait_for(runner, timeout=2.0)
         assert runner.done() and runner.exception() is None
