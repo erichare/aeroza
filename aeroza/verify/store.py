@@ -233,9 +233,7 @@ async def aggregate_calibration_series(
     # `to_timestamp(floor(epoch / N) * N)` snaps every row to the start
     # of its bucket. Cast verified_at to epoch via extract().
     bucket_expr = func.to_timestamp(
-        func.floor(
-            func.extract("epoch", VerificationRow.verified_at) / bucket_seconds
-        )
+        func.floor(func.extract("epoch", VerificationRow.verified_at) / bucket_seconds)
         * bucket_seconds
     ).label("bucket_start")
 

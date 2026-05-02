@@ -107,9 +107,7 @@ async def _seed_verification(
         )
         if verified_at is not None:
             await session.execute(
-                text(
-                    "UPDATE nowcast_verifications SET verified_at = :v WHERE id = :id"
-                ),
+                text("UPDATE nowcast_verifications SET verified_at = :v WHERE id = :id"),
                 {"v": verified_at, "id": verification.id},
             )
         await session.commit()
@@ -179,9 +177,7 @@ async def test_series_separates_algorithms(
     assert {item["algorithm"] for item in items} == {"persistence", "pretend-pysteps"}
 
 
-async def test_series_filters_window(
-    api_client: AsyncClient, integration_db: Database
-) -> None:
+async def test_series_filters_window(api_client: AsyncClient, integration_db: Database) -> None:
     now = datetime.now(UTC)
     await _seed_verification(
         integration_db,
@@ -215,9 +211,7 @@ async def test_series_buckets_use_requested_width(
     )
 
     hourly = await api_client.get(ROUTE, params={"windowHours": 24, "bucketSeconds": 3600})
-    five_min = await api_client.get(
-        ROUTE, params={"windowHours": 24, "bucketSeconds": 300}
-    )
+    five_min = await api_client.get(ROUTE, params={"windowHours": 24, "bucketSeconds": 300})
     assert len(hourly.json()["items"][0]["points"]) == 1
     assert len(five_min.json()["items"][0]["points"]) == 2
 
