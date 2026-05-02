@@ -1,0 +1,14 @@
+{
+  "name": "aeroza-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aeroza JavaScript/TypeScript workspaces — keeps the SDK and the dev console in sync via npm workspaces.",
+  "workspaces": [
+    "sdk-ts",
+    "web"
+  ],
+  "scripts": {
+    "typecheck": "npm run --workspaces typecheck --if-present",
+    "test": "npm run --workspaces test --if-present"
+  }
+}
