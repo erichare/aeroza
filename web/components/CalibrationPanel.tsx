@@ -5,10 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type CalibrationItem,
   type CalibrationResponse,
+  type CalibrationSeriesItem,
+  type CalibrationSeriesResponse,
   fetchCalibration,
+  fetchCalibrationSeries,
 } from "@/lib/api";
 
 import { Panel } from "./Panel";
+import { Sparkline } from "./Sparkline";
 import { StatusDot } from "./StatusDot";
 
 const WINDOW_OPTIONS: ReadonlyArray<{ label: string; hours: number }> = [
@@ -34,6 +38,7 @@ const REFRESH_INTERVAL_MS = 60_000;
 export function CalibrationPanel() {
   const [windowHours, setWindowHours] = useState<number>(24);
   const [data, setData] = useState<CalibrationResponse | null>(null);
+  const [series, setSeries] = useState<CalibrationSeriesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -42,9 +47,17 @@ export function CalibrationPanel() {
     setIsLoading(true);
     const load = async () => {
       try {
-        const next = await fetchCalibration({ windowHours });
+        const bucketSeconds = pickBucketSeconds(windowHours);
+        // Aggregate + per-series fetched in parallel — they hit different
+        // SQL paths but share the same window, so doing them together
+        // keeps the dashboard one-shot.
+        const [aggregate, ts] = await Promise.all([
+          fetchCalibration({ windowHours }),
+          fetchCalibrationSeries({ windowHours, bucketSeconds }),
+        ]);
         if (cancelled) return;
-        setData(next);
+        setData(aggregate);
+        setSeries(ts);
         setError(null);
       } catch (err) {
         if (cancelled) return;
@@ -61,7 +74,10 @@ export function CalibrationPanel() {
     };
   }, [windowHours]);
 
-  const matrix = useMemo(() => buildMatrix(data?.items ?? []), [data]);
+  const matrix = useMemo(
+    () => buildMatrix(data?.items ?? [], series?.items ?? []),
+    [data, series],
+  );
 
   return (
     <Panel
@@ -103,10 +119,14 @@ interface CalibrationMatrixData {
   algorithms: string[];
   horizons: number[];
   cells: Map<string, CalibrationItem>;
+  serieses: Map<string, CalibrationSeriesItem>;
   worstMae: number;
 }
 
-function buildMatrix(items: ReadonlyArray<CalibrationItem>): CalibrationMatrixData {
+function buildMatrix(
+  items: ReadonlyArray<CalibrationItem>,
+  seriesItems: ReadonlyArray<CalibrationSeriesItem>,
+): CalibrationMatrixData {
   const algorithms = uniqueSorted(items.map((i) => i.algorithm));
   const horizons = uniqueSorted(items.map((i) => i.forecastHorizonMinutes), (a, b) => a - b);
   const cells = new Map<string, CalibrationItem>();
@@ -115,11 +135,29 @@ function buildMatrix(items: ReadonlyArray<CalibrationItem>): CalibrationMatrixDa
     cells.set(`${item.algorithm}:${item.forecastHorizonMinutes}`, item);
     if (item.maeMean > worstMae) worstMae = item.maeMean;
   }
-  return { algorithms, horizons, cells, worstMae };
+  const serieses = new Map<string, CalibrationSeriesItem>();
+  for (const s of seriesItems) {
+    serieses.set(`${s.algorithm}:${s.forecastHorizonMinutes}`, s);
+  }
+  return { algorithms, horizons, cells, serieses, worstMae };
+}
+
+/**
+ * Pick a sparkline bucket width from the requested window.
+ *
+ * Aim for ~24-30 points so the sparkline reads as a trend, not a
+ * histogram. Hourly for 24h or less, then linear scale up to a daily
+ * bucket for the 30-day view.
+ */
+function pickBucketSeconds(windowHours: number): number {
+  if (windowHours <= 6) return 900;       // 15 min → 24 points
+  if (windowHours <= 24) return 3600;     // 1 h → 24 points
+  if (windowHours <= 168) return 21_600;  // 6 h → 28 points
+  return 86_400;                          // 1 day → up to 30
 }
 
 function CalibrationMatrix({ matrix }: { matrix: CalibrationMatrixData }) {
-  const { algorithms, horizons, cells, worstMae } = matrix;
+  const { algorithms, horizons, cells, serieses, worstMae } = matrix;
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-xs">
@@ -141,6 +179,7 @@ function CalibrationMatrix({ matrix }: { matrix: CalibrationMatrixData }) {
               </td>
               {horizons.map((h, i) => {
                 const cell = cells.get(`${algo}:${h}`);
+                const series = serieses.get(`${algo}:${h}`);
                 const isLast = i === horizons.length - 1;
                 return (
                   <td
@@ -150,7 +189,15 @@ function CalibrationMatrix({ matrix }: { matrix: CalibrationMatrixData }) {
                       isLast ? "rounded-r-md" : "",
                     ].join(" ")}
                   >
-                    {cell ? <CalibrationCell cell={cell} worstMae={worstMae} /> : <Dash />}
+                    {cell ? (
+                      <CalibrationCell
+                        cell={cell}
+                        series={series}
+                        worstMae={worstMae}
+                      />
+                    ) : (
+                      <Dash />
+                    )}
                   </td>
                 );
               })}
@@ -164,9 +211,11 @@ function CalibrationMatrix({ matrix }: { matrix: CalibrationMatrixData }) {
 
 function CalibrationCell({
   cell,
+  series,
   worstMae,
 }: {
   cell: CalibrationItem;
+  series: CalibrationSeriesItem | undefined;
   worstMae: number;
 }) {
   // Bar fills proportional to (mae / worstMae). The worst cell maxes out;
@@ -174,6 +223,14 @@ function CalibrationCell({
   // glance.
   const ratio = worstMae > 0 ? cell.maeMean / worstMae : 0;
   const barPct = Math.min(100, Math.max(0, ratio * 100));
+
+  // Per-cell sparkline: pull MAE per bucket, scaled against the same
+  // worstMae as the matrix so the Y-axis is shared across rows. Buckets
+  // with no samples are rendered as gaps (null), not zero.
+  const sparkValues = series?.points.map((p) =>
+    p.sampleCount > 0 ? p.maeMean : null,
+  );
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
@@ -191,6 +248,16 @@ function CalibrationCell({
           aria-hidden
         />
       </div>
+      {sparkValues && sparkValues.length > 1 ? (
+        <Sparkline
+          values={sparkValues}
+          yMin={0}
+          yMax={worstMae > 0 ? worstMae : undefined}
+          width={120}
+          height={20}
+          label={`MAE trend for ${cell.algorithm} at ${cell.forecastHorizonMinutes} min`}
+        />
+      ) : null}
       <div className="flex justify-between font-mono text-[10px] tabular-nums text-muted">
         <span title="Bias mean">
           bias {cell.biasMean >= 0 ? "+" : ""}
@@ -275,6 +342,9 @@ function Footnote() {
       Sample-weighted: a verification with N=1M cells contributes N times to the
       averages. The bar inside each MAE cell scales relative to the worst
       algorithm in the window — shorter bars mean a more accurate forecaster.
+      The sparkline shows MAE per time bucket (15 min / 1 h / 6 h / 1 d
+      depending on window) so you can watch a real algorithm's accuracy trend
+      down over time.
     </p>
   );
 }
