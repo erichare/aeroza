@@ -8,6 +8,7 @@ from typing import Final
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from aeroza import __version__
 from aeroza.config import Settings, get_settings
@@ -21,6 +22,14 @@ API_TITLE: Final = "Aeroza"
 API_DESCRIPTION: Final = (
     "Programmable weather intelligence: streaming APIs, geospatial queries, "
     "and probabilistic nowcasting."
+)
+
+# Origins the local Next.js dev console is served from. Only applied when
+# ``settings.env == "development"`` — production gets no permissive CORS
+# until we have real auth + a deployed marketing site to whitelist.
+DEV_CONSOLE_ORIGINS: Final[tuple[str, ...]] = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 )
 
 
@@ -70,6 +79,15 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    if get_settings().env == "development":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(DEV_CONSOLE_ORIGINS),
+            allow_credentials=False,
+            allow_methods=["GET", "OPTIONS"],
+            allow_headers=["*"],
+        )
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:

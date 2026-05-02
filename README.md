@@ -28,6 +28,20 @@ uv run pytest
 
 The API listens on `http://localhost:8000`. Health check: `GET /health`.
 
+### Dev console (web UI)
+
+A small Next.js dev console lives in [`web/`](web/) — it visualises the
+live `/v1/alerts/stream` SSE feed, the MRMS file catalog, and the system
+health endpoint. Useful for testing and demoing while the polished Phase 5
+client is still ahead. From the repo root:
+
+```bash
+make web-install   # one-time
+make web-dev       # http://localhost:3000
+```
+
+Requires `make dev` (FastAPI on :8000) running in another terminal.
+
 ## Architecture
 
 Modular monolith (FastAPI) with extracted ingest workers:
