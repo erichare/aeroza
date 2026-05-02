@@ -14,6 +14,10 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
 - ``GET /v1/mrms/grids`` — materialised-grid catalog ("what data is
   decoded and queryable right now") populated by the
   ``aeroza-materialise-mrms`` worker.
+- ``GET /v1/mrms/grids/sample`` — point sample (``lat``, ``lng``) against
+  the latest matching grid (or one ``at_time`` in the past). The first
+  read-side primitive over the materialised grids — turns the catalog
+  from "what is available" into "what is the value here, right now".
 - ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
 - ``GET /v1/stats`` — compact health-style snapshot of how much data the
   system currently knows about (alerts active/total, MRMS files,
@@ -21,7 +25,7 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
-matcher.
+matcher. Same for ``/mrms/grids/sample`` vs ``/mrms/grids/{file_key:path}``.
 """
 
 from __future__ import annotations
@@ -67,9 +71,17 @@ from aeroza.query.mrms_grids import (
 from aeroza.query.mrms_grids import (
     MrmsGridItem,
     MrmsGridList,
+    find_latest_mrms_grid,
     find_mrms_grid_by_key,
     find_mrms_grids,
     mrms_grid_view_to_item,
+)
+from aeroza.query.mrms_sample import (
+    DEFAULT_TOLERANCE_DEG,
+    MAX_TOLERANCE_DEG,
+    MrmsGridSampleResponse,
+    OutOfDomainError,
+    sample_grid_at_point,
 )
 from aeroza.query.parsers import parse_bbox, parse_point
 from aeroza.query.schemas import (
@@ -338,6 +350,122 @@ async def list_mrms_grids_route(
         limit=limit,
     )
     return MrmsGridList(items=[mrms_grid_view_to_item(v) for v in views])
+
+
+@router.get(
+    "/mrms/grids/sample",
+    response_model=MrmsGridSampleResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["mrms"],
+    summary="Sample one MRMS grid value at a (latitude, longitude) point",
+    description=(
+        "Returns the nearest-cell value for ``(lat, lng)`` from a "
+        "materialised MRMS grid. By default samples the *latest* grid for "
+        "the given ``product``/``level``; pass ``at_time`` (ISO-8601 UTC) "
+        "to sample the most-recent grid valid at-or-before that moment. "
+        "Out-of-domain requests (no cell within ``tolerance_deg``) return "
+        "404 rather than a misleading nearest-edge value."
+    ),
+    responses={
+        404: {
+            "description": (
+                "No materialised grid satisfies the request, or the request "
+                "point is outside the grid (farther than ``tolerance_deg`` "
+                "from any cell)."
+            ),
+        },
+    },
+)
+async def sample_mrms_grid_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    lat: Annotated[
+        float,
+        Query(
+            ge=-90.0,
+            le=90.0,
+            description="Latitude in degrees (WGS84).",
+            examples=[29.76],
+        ),
+    ],
+    lng: Annotated[
+        float,
+        Query(
+            ge=-180.0,
+            le=180.0,
+            description="Longitude in degrees (WGS84, -180..180).",
+            examples=[-95.37],
+        ),
+    ],
+    product: Annotated[
+        str,
+        Query(description="MRMS product (e.g. 'MergedReflectivityComposite')."),
+    ] = "MergedReflectivityComposite",
+    level: Annotated[
+        str,
+        Query(description="MRMS product level (e.g. '00.50')."),
+    ] = "00.50",
+    at_time: Annotated[
+        datetime | None,
+        Query(
+            description=(
+                "Sample the most recent grid with valid_at <= this moment. "
+                "Defaults to the overall latest grid."
+            ),
+        ),
+    ] = None,
+    tolerance_deg: Annotated[
+        float,
+        Query(
+            gt=0.0,
+            le=MAX_TOLERANCE_DEG,
+            description=(
+                f"Reject the sample if no cell is within this many degrees "
+                f"(default {DEFAULT_TOLERANCE_DEG}; max {MAX_TOLERANCE_DEG})."
+            ),
+        ),
+    ] = DEFAULT_TOLERANCE_DEG,
+) -> MrmsGridSampleResponse:
+    grid = await find_latest_mrms_grid(
+        session,
+        product=product,
+        level=level,
+        at_or_before=at_time,
+    )
+    if grid is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"no materialised grid for product={product!r} level={level!r}"
+                + (f" at_or_before={at_time.isoformat()}" if at_time else "")
+            ),
+        )
+    try:
+        sample = await sample_grid_at_point(
+            zarr_uri=grid.zarr_uri,
+            variable=grid.variable,
+            latitude=lat,
+            longitude=lng,
+            tolerance_deg=tolerance_deg,
+        )
+    except OutOfDomainError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return MrmsGridSampleResponse(
+        file_key=grid.file_key,
+        product=grid.product,
+        level=grid.level,
+        valid_at=grid.valid_at,
+        variable=sample.variable,
+        value=sample.value,
+        requested_latitude=lat,
+        requested_longitude=lng,
+        matched_latitude=sample.latitude,
+        matched_longitude=sample.longitude,
+        tolerance_deg=tolerance_deg,
+    )
 
 
 @router.get(

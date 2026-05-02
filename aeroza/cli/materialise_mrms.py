@@ -10,6 +10,13 @@ Decoupled from discovery on purpose: cfgrib + Zarr writes are
 slower and more failure-prone than S3 listing, and we don't want a
 decode error or missing system library to silence "what files exist
 right now" telemetry.
+
+When NATS is wired up (the default) the worker also subscribes to
+``aeroza.mrms.files.new`` and runs a tick per event, so a freshly-
+discovered file lands as a queryable Zarr grid within seconds. The
+interval loop continues to run as a backstop for missed events / cold
+start. Pass ``--no-publish`` to disable both directions of NATS (no
+publish, no subscribe — interval-only).
 """
 
 from __future__ import annotations
@@ -25,11 +32,17 @@ import structlog
 
 from aeroza.config import Settings, get_settings
 from aeroza.ingest._aws import open_data_s3_client
+from aeroza.ingest.mrms_materialise_event import run_event_triggered_materialisation
 from aeroza.ingest.mrms_materialise_poll import materialise_unmaterialised_once
 from aeroza.ingest.scheduler import IntervalLoop
 from aeroza.shared.db import Database, create_engine_and_session
-from aeroza.stream.nats import NatsMrmsGridPublisher, nats_connection
+from aeroza.stream.nats import (
+    NatsMrmsFileSubscriber,
+    NatsMrmsGridPublisher,
+    nats_connection,
+)
 from aeroza.stream.publisher import MrmsGridPublisher, NullMrmsGridPublisher
+from aeroza.stream.subscriber import MrmsFileSubscriber
 
 log = structlog.get_logger(__name__)
 
@@ -119,12 +132,13 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
     db = create_engine_and_session(settings.database_url)
     try:
         if args.no_publish:
-            await _drive(db=db, publisher=NullMrmsGridPublisher(), args=args)
+            await _drive(db=db, publisher=NullMrmsGridPublisher(), subscriber=None, args=args)
             return 0
 
         async with nats_connection(settings.nats_url) as nats_client:
             publisher = NatsMrmsGridPublisher(nats_client)
-            await _drive(db=db, publisher=publisher, args=args)
+            subscriber = NatsMrmsFileSubscriber(nats_client)
+            await _drive(db=db, publisher=publisher, subscriber=subscriber, args=args)
         return 0
     finally:
         await db.dispose()
@@ -134,6 +148,7 @@ async def _drive(
     *,
     db: Database,
     publisher: MrmsGridPublisher,
+    subscriber: MrmsFileSubscriber | None,
     args: argparse.Namespace,
 ) -> None:
     target_root = Path(args.target_root)
@@ -152,6 +167,8 @@ async def _drive(
         )
 
     if args.once:
+        # `--once` is a cron-friendly single tick; subscriptions don't make
+        # sense here (they'd never be drained before the process exits).
         await tick()
         return
 
@@ -159,9 +176,33 @@ async def _drive(
     stopper = asyncio.Event()
     _install_signal_handlers(stopper)
     await loop.start()
+
+    # Run the event-driven consumer concurrently with the interval loop.
+    # When the subscriber is None (e.g. `--no-publish`) the worker is
+    # interval-only — same behaviour as before this feature landed.
+    consumer_task: asyncio.Task[None] | None = None
+    if subscriber is not None:
+        consumer_task = asyncio.create_task(
+            run_event_triggered_materialisation(
+                subscriber=subscriber,
+                db=db,
+                s3_client=s3_client,
+                target_root=target_root,
+                product=args.product,
+                level=args.level,
+                batch_size=args.batch_size,
+                publisher=publisher,
+            ),
+            name="mrms.materialise.event_consumer",
+        )
+
     try:
         await stopper.wait()
     finally:
+        if consumer_task is not None:
+            consumer_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await consumer_task
         await loop.stop()
 
 

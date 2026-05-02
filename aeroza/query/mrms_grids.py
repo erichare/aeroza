@@ -138,6 +138,39 @@ async def find_mrms_grid_by_key(
     return _row_to_view(row)
 
 
+async def find_latest_mrms_grid(
+    session: AsyncSession,
+    *,
+    product: str,
+    level: str,
+    at_or_before: datetime | None = None,
+) -> MrmsGridView | None:
+    """Return the most recent materialised grid for ``product``/``level``.
+
+    When ``at_or_before`` is set, returns the latest grid whose
+    ``valid_at`` is ``<= at_or_before`` — i.e. "the most recent observation
+    that was valid at the requested moment". When ``None``, returns the
+    overall latest grid for the product/level.
+
+    Returns ``None`` if no grid exists for the constraints. Same join +
+    ordering as :func:`find_mrms_grids`, just truncated to a single row.
+    """
+    stmt = (
+        select(*_BASE_COLUMNS)
+        .join(MrmsFileRow, MrmsFileRow.key == MrmsGridRow.file_key)
+        .where(MrmsFileRow.product == product, MrmsFileRow.level == level)
+        .order_by(MrmsFileRow.valid_at.desc())
+        .limit(1)
+    )
+    if at_or_before is not None:
+        stmt = stmt.where(MrmsFileRow.valid_at <= at_or_before)
+    result = await session.execute(stmt)
+    row = result.mappings().first()
+    if row is None:
+        return None
+    return _row_to_view(row)
+
+
 def _row_to_view(row: Any) -> MrmsGridView:
     return MrmsGridView(
         file_key=row["file_key"],
