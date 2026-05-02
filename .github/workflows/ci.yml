@@ -96,9 +96,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends libeccodes-dev
 
       - name: Sync dependencies
-        run: |
-          uv sync --all-extras --extra grib --frozen \
-            || uv sync --all-extras --extra grib
+        # ``--all-extras`` already includes ``[grib]`` (cfgrib installs as
+        # pure-Python from PyPI; the eccodes system lib is installed above).
+        # ``--all-extras`` and ``--extra <name>`` are mutually exclusive in uv.
+        run: uv sync --all-extras --frozen || uv sync --all-extras
 
       - name: Create test database
         run: |
