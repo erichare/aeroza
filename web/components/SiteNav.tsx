@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/", label: "Home" },
   { href: "/map", label: "Map" },
+  { href: "/calibration", label: "Calibration" },
   { href: "/console", label: "Console" },
   { href: "/docs", label: "Docs" },
 ];

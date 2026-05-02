@@ -18,6 +18,8 @@ import type {
   AlertDetailFeature,
   AlertFeatureCollection,
   AlertQuery,
+  CalibrationQuery,
+  CalibrationResponse,
   Health,
   MrmsFileList,
   MrmsGridItem,
@@ -174,6 +176,24 @@ export class AeroaClient {
     if (query.atTime) params.set("at_time", query.atTime);
     return this.getJson<MrmsGridPolygonSample>(
       this.withQuery("/v1/mrms/grids/polygon", params),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Calibration
+
+  async getCalibration(
+    query: CalibrationQuery = {},
+  ): Promise<CalibrationResponse> {
+    const params = new URLSearchParams();
+    if (query.windowHours !== undefined) {
+      params.set("windowHours", String(query.windowHours));
+    }
+    if (query.algorithm) params.set("algorithm", query.algorithm);
+    if (query.product) params.set("product", query.product);
+    if (query.level) params.set("level", query.level);
+    return this.getJson<CalibrationResponse>(
+      this.withQuery("/v1/calibration", params),
     );
   }
 
