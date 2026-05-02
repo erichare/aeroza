@@ -41,13 +41,14 @@ matcher. Same for ``/mrms/grids/sample`` and ``/mrms/grids/polygon`` vs
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.ingest.nws_alerts import Severity
@@ -117,6 +118,7 @@ from aeroza.query.schemas import (
     alert_view_to_feature,
 )
 from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
+from aeroza.tiles.raster import render_tile_png, transparent_tile_png
 from aeroza.verify.schemas import (
     CalibrationResponse,
     calibration_buckets_to_response,
@@ -384,6 +386,116 @@ async def list_mrms_grids_route(
         limit=limit,
     )
     return MrmsGridList(items=[mrms_grid_view_to_item(v) for v in views])
+
+
+# ---------------------------------------------------------------------------
+# Raster tile endpoint
+# ---------------------------------------------------------------------------
+
+# Cap zoom so a single misbehaving client can't ask for billions of
+# unique tiles. The MRMS grid is ~1 km cell size; rendering past z=10
+# starts oversampling without any data benefit.
+_TILE_MAX_ZOOM: int = 10
+
+# Cache TTL for rendered tiles. Grids refresh every ~2 minutes upstream,
+# so 60 s keeps the map pleasantly fresh while still letting CDNs/browsers
+# coalesce zoom-pan storms.
+_TILE_CACHE_SECONDS: int = 60
+
+
+@router.get(
+    "/mrms/tiles/{z}/{x}/{y}.png",
+    tags=["mrms"],
+    summary="Raster tile of an MRMS grid (Web Mercator, XYZ)",
+    description=(
+        "Returns a 256×256 PNG suitable as a MapLibre / Leaflet raster "
+        "source. By default renders the most recent ``MergedReflectivity"
+        "Composite`` grid; pass ``file_key`` to pin a specific grid (used "
+        "by the timeline scrubber). Tiles are sampled nearest-neighbor "
+        "from the Zarr store, coloured with the standard NWS dBZ ramp, "
+        "and 86%-opaque so the basemap shows through where there's no "
+        "echo."
+    ),
+    response_class=Response,
+    responses={
+        200: {"content": {"image/png": {}}, "description": "Tile PNG."},
+        404: {"description": "No matching grid materialised yet."},
+    },
+)
+async def get_mrms_tile_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    z: Annotated[int, Path(ge=0, le=_TILE_MAX_ZOOM, description="Zoom level (0–10).")],
+    x: Annotated[int, Path(ge=0, description="Tile column.")],
+    y: Annotated[int, Path(ge=0, description="Tile row.")],
+    product: Annotated[
+        str,
+        Query(description="MRMS product (e.g. 'MergedReflectivityComposite')."),
+    ] = "MergedReflectivityComposite",
+    level: Annotated[
+        str,
+        Query(description="MRMS product level (e.g. '00.50')."),
+    ] = "00.50",
+    file_key: Annotated[
+        str | None,
+        Query(
+            alias="fileKey",
+            description=(
+                "Optional pin to one specific source file_key. When omitted, "
+                "the latest grid for the requested product/level is used."
+            ),
+        ),
+    ] = None,
+) -> Response:
+    if file_key is not None:
+        grid = await find_mrms_grid_by_key(session, file_key)
+    else:
+        grid = await find_latest_mrms_grid(session, product=product, level=level)
+
+    if grid is None:
+        # Return a transparent tile rather than a 404 — the MapLibre
+        # raster source aggressively retries 404s, which would spam the
+        # API with tiles outside the materialised grid's coverage.
+        return Response(
+            content=transparent_tile_png(),
+            media_type="image/png",
+            headers={"Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS}"},
+        )
+
+    n = 1 << z
+    if x >= n or y >= n:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"tile coords out of range for zoom {z} (max x/y = {n - 1})",
+        )
+
+    try:
+        png = await asyncio.to_thread(
+            render_tile_png,
+            zarr_uri=grid.zarr_uri,
+            variable=grid.variable,
+            z=z,
+            x=x,
+            y=y,
+        )
+    except KeyError as exc:
+        # Variable not in Zarr → grid in catalog is broken; surface as 502.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"grid storage missing variable: {exc}",
+        ) from exc
+
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS}",
+            # Including the source key in headers lets clients (and our
+            # smoke tests) verify which grid populated a tile without
+            # decoding the PNG.
+            "X-Aeroza-Grid-Key": grid.file_key,
+            "X-Aeroza-Grid-Valid-At": grid.valid_at.isoformat(),
+        },
+    )
 
 
 @router.get(

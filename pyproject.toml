@@ -45,6 +45,7 @@ ingest = [
     "xarray>=2024.10",
     "zarr>=2.18",
     "numpy>=2.1",
+    "pillow>=11.0",
 ]
 # `nowcast` and `grib` carry heavy C-extension deps (pysteps needs OpenMP via
 # libomp; cfgrib needs eccodes). They are intentionally outside `--all-extras`
