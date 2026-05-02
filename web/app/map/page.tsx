@@ -53,6 +53,7 @@ export default function MapPage() {
   const [isLive, setIsLive] = useState(true);
 
   const [ticks, setTicks] = useState<ReadonlyArray<TimelineTick>>([]);
+  const [showRadar, setShowRadar] = useState(true);
 
   // Keep the timeline window's right edge sliding forward so 'now' stays
   // visible. Doesn't touch `displayedAt` unless the user is in live mode.
@@ -156,6 +157,20 @@ export default function MapPage() {
         </div>
 
         <div className="flex items-center gap-2 text-[11px]">
+          <button
+            type="button"
+            onClick={() => setShowRadar((v) => !v)}
+            aria-pressed={showRadar}
+            className={[
+              "rounded-md border px-2 py-1 font-mono uppercase tracking-wide",
+              showRadar
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-border/60 text-muted hover:border-accent/60 hover:text-accent",
+            ].join(" ")}
+            title="Toggle MRMS reflectivity radar overlay"
+          >
+            {showRadar ? "● Radar" : "Radar"}
+          </button>
           <Link
             href="/console"
             className="rounded-md border border-border/60 px-2 py-1 text-muted hover:border-accent/60 hover:text-accent"
@@ -174,6 +189,7 @@ export default function MapPage() {
       <div className="relative flex-1">
         <AlertsMap
           displayedAt={isLive ? null : displayedAt}
+          showRadar={showRadar}
           onLoaded={handleLoaded}
         />
       </div>

@@ -1,0 +1,165 @@
+"""Render a single XYZ raster tile from a Zarr-backed MRMS grid.
+
+The pipeline:
+
+1. Open the Zarr store (eagerly — the grids are <50MB and we read them
+   end-to-end anyway for the tile sample).
+2. Compute the tile's pixel-center (lat, lng) grid.
+3. Translate every pixel's longitude into the grid's native convention
+   (MRMS uses ``[0, 360)``, slippy tiles use ``[-180, 180]``).
+4. Nearest-neighbor lookup against the grid's regular axes.
+5. Apply the dBZ colormap and PNG-encode.
+
+Cells outside the grid extent become alpha=0, so a tile over Mexico
+returns transparent without the caller having to know the CONUS bounds.
+"""
+
+from __future__ import annotations
+
+import io
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+from aeroza.tiles.colormap import reflectivity_to_rgba
+from aeroza.tiles.web_mercator import (
+    TILE_SIZE,
+    TileBounds,
+    latlng_to_pixel_indices,
+    pixel_lonlat_grid,
+    tile_bounds,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import xarray as xr
+
+
+def render_tile_png(
+    *,
+    zarr_uri: str,
+    variable: str,
+    z: int,
+    x: int,
+    y: int,
+    tile_size: int = TILE_SIZE,
+) -> bytes:
+    """Render tile ``(z, x, y)`` of the grid stored at ``zarr_uri``.
+
+    Returns the PNG-encoded bytes. Empty / out-of-domain tiles are
+    returned as fully transparent PNGs so the client doesn't have to
+    handle 404s on every miss.
+    """
+    bounds = tile_bounds(z, x, y)
+    rgba = _render_rgba(
+        zarr_uri=zarr_uri,
+        variable=variable,
+        bounds=bounds,
+        tile_size=tile_size,
+    )
+    return _encode_png(rgba)
+
+
+def _render_rgba(
+    *,
+    zarr_uri: str,
+    variable: str,
+    bounds: TileBounds,
+    tile_size: int,
+) -> np.ndarray:
+    """Sample the grid into a tile-shaped RGBA array."""
+    import xarray as xr
+
+    ds = xr.open_zarr(zarr_uri)
+    try:
+        if variable not in ds.variables:
+            raise KeyError(f"variable {variable!r} not in store {zarr_uri}")
+        da = ds[variable].load()
+        return _sample_into_tile(da, bounds=bounds, tile_size=tile_size)
+    finally:
+        ds.close()
+
+
+def _sample_into_tile(
+    da: xr.DataArray, *, bounds: TileBounds, tile_size: int
+) -> np.ndarray:
+    """Project the grid into the tile's pixel grid via nearest neighbor."""
+    grid_lats = np.asarray(da["latitude"].values, dtype=np.float64)
+    grid_lngs = np.asarray(da["longitude"].values, dtype=np.float64)
+    values = np.asarray(da.values, dtype=np.float32)
+
+    if values.ndim != 2:
+        raise ValueError(
+            f"expected 2D grid, got dims={da.dims} shape={values.shape}"
+        )
+
+    # MRMS axes typically descend (north→south for latitude). The
+    # nearest-neighbor index math expects ascending; if descending,
+    # flip the array + axis once and treat as ascending. Cheap copy on
+    # an already-loaded array.
+    if grid_lats.size >= 2 and grid_lats[1] < grid_lats[0]:
+        grid_lats = grid_lats[::-1]
+        values = values[::-1, :]
+    if grid_lngs.size >= 2 and grid_lngs[1] < grid_lngs[0]:
+        grid_lngs = grid_lngs[::-1]
+        values = values[:, ::-1]
+
+    # Tile pixel centers in WGS84.
+    lng_grid, lat_grid = pixel_lonlat_grid(bounds, tile_size=tile_size)
+
+    # Translate request longitudes into the grid's convention.
+    lng_grid = _to_grid_longitude(lng_grid, grid_lngs)
+
+    rows, cols, in_bounds = latlng_to_pixel_indices(
+        lats=lat_grid,
+        lngs=lng_grid,
+        grid_lats=grid_lats,
+        grid_lngs=grid_lngs,
+    )
+    sampled = values[rows, cols].astype(np.float32)
+    sampled = np.where(in_bounds, sampled, np.nan)
+    return reflectivity_to_rgba(sampled)
+
+
+def _to_grid_longitude(
+    lngs: np.ndarray, grid_lngs: np.ndarray
+) -> np.ndarray:
+    """If the grid uses ``[0, 360)`` longitudes (MRMS native), shift
+    negative request longitudes into that range. Otherwise pass through.
+
+    A grid is considered native-360 if its max longitude exceeds 180.
+    """
+    if grid_lngs.size == 0:
+        return lngs
+    if float(grid_lngs.max()) <= 180.0:
+        return lngs
+    out = lngs.copy()
+    out[out < 0.0] += 360.0
+    return out
+
+
+def _encode_png(rgba: np.ndarray) -> bytes:
+    """RGBA uint8 → PNG bytes via Pillow."""
+    from PIL import Image
+
+    if rgba.dtype != np.uint8:
+        rgba = rgba.astype(np.uint8)
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=False)
+    return buf.getvalue()
+
+
+def transparent_tile_png(*, tile_size: int = TILE_SIZE) -> bytes:
+    """Return a fully-transparent PNG of the requested size.
+
+    Useful as the fallback when a grid is unavailable — keeps the
+    MapLibre raster source from spamming 404s.
+    """
+    rgba = np.zeros((tile_size, tile_size, 4), dtype=np.uint8)
+    return _encode_png(rgba)
+
+
+__all__ = [
+    "render_tile_png",
+    "transparent_tile_png",
+]

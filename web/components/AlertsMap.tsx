@@ -10,6 +10,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
 import {
+  API_BASE,
   type AlertFeature,
   type AlertFeatureCollection,
   type Severity,
@@ -23,7 +24,17 @@ const SOURCE_ID = "alerts";
 const FILL_LAYER_ID = "alerts-fill";
 const OUTLINE_LAYER_ID = "alerts-outline";
 
+const RADAR_SOURCE_ID = "mrms-radar";
+const RADAR_LAYER_ID = "mrms-radar";
+// Insert radar layer just below the alert polygons so alerts stay on top
+// (severity polygons are the primary signal; radar is the backdrop).
+
 const REFRESH_INTERVAL_MS = 30_000;
+// Bust the radar tile cache once per minute so the layer trends fresh as
+// new MRMS grids land. We don't reload the whole layer — appending a
+// `?_=N` query string forces MapLibre to re-fetch tiles without needing
+// to recreate the source.
+const RADAR_REFRESH_INTERVAL_MS = 60_000;
 
 const SEVERITY_ORDER: Severity[] = [
   "Extreme",
@@ -89,6 +100,11 @@ interface AlertsMapProps {
    * decide. When omitted, every fetched alert is shown.
    */
   displayedAt?: Date | null;
+  /**
+   * Show the MRMS reflectivity raster underneath the alert polygons. Tiles
+   * come from `/v1/mrms/tiles/{z}/{x}/{y}.png` (latest grid).
+   */
+  showRadar?: boolean;
   onLoaded?: (collection: AlertFeatureCollection) => void;
 }
 
@@ -117,6 +133,7 @@ function wasActiveAt(feature: AlertFeature, asOf: Date): boolean {
 export function AlertsMap({
   initialBounds,
   displayedAt,
+  showRadar = true,
   onLoaded,
 }: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -158,6 +175,28 @@ export function AlertsMap({
     function onMapLoad() {
       const map = mapRef.current;
       if (!map) return;
+
+      // Radar source/layer — sits below alert polygons so a severe-storm
+      // alert always paints on top of the reflectivity blob it covers.
+      // Cache-bust query (`?_=ts`) is what we mutate on the refresh tick
+      // to fetch fresher tiles without recreating the source.
+      map.addSource(RADAR_SOURCE_ID, {
+        type: "raster",
+        tiles: [`${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?_=${Date.now()}`],
+        tileSize: 256,
+        attribution: "MRMS · NOAA / NSSL",
+      });
+      map.addLayer({
+        id: RADAR_LAYER_ID,
+        type: "raster",
+        source: RADAR_SOURCE_ID,
+        layout: { visibility: showRadar ? "visible" : "none" },
+        paint: {
+          "raster-opacity": 0.85,
+          "raster-resampling": "nearest",
+        },
+      });
+
       map.addSource(SOURCE_ID, {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -282,6 +321,41 @@ export function AlertsMap({
     if (!cached) return;
     applyToSource(cached, displayedAt ?? null);
   }, [ready, displayedAt]);
+
+  // Toggle radar visibility without rebuilding the source.
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    const map = mapRef.current;
+    if (!map.getLayer(RADAR_LAYER_ID)) return;
+    map.setLayoutProperty(
+      RADAR_LAYER_ID,
+      "visibility",
+      showRadar ? "visible" : "none",
+    );
+  }, [ready, showRadar]);
+
+  // Periodically swap the radar tile URL with a new cache-buster so
+  // MapLibre re-fetches and the user sees the latest grid land.
+  useEffect(() => {
+    if (!ready || !showRadar) return;
+    const refresh = () => {
+      const map = mapRef.current;
+      if (!map) return;
+      const source = map.getSource(RADAR_SOURCE_ID);
+      if (!source) return;
+      const url = `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?_=${Date.now()}`;
+      // setTiles() is the documented way to swap a raster source's URL
+      // template without losing the layer's place in the stack.
+      // Casting via unknown — MapLibre's runtime exposes setTiles on
+      // raster sources but the static .d.ts types it as part of an
+      // internal interface only.
+      (source as unknown as { setTiles?: (tiles: string[]) => void }).setTiles?.(
+        [url],
+      );
+    };
+    const id = setInterval(refresh, RADAR_REFRESH_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [ready, showRadar]);
 
   function applyToSource(
     collection: AlertFeatureCollection,
