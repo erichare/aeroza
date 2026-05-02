@@ -255,13 +255,36 @@ export default function ConceptsPage() {
             <td>Cells contributing to the means</td>
             <td>The denominator — small numbers mean noisy aggregates</td>
           </tr>
+          <tr>
+            <td><code>pod</code> / <code>far</code> / <code>csi</code></td>
+            <td>Categorical skill scores</td>
+            <td>How well the algorithm caught threshold crossings</td>
+          </tr>
+          <tr>
+            <td><code>thresholdDbz</code></td>
+            <td>The threshold the categorical metrics scored against</td>
+            <td>Default 35 dBZ — operational meteorology's "convective cell" cutoff. <code>null</code> if rows in the bucket disagreed.</td>
+          </tr>
         </tbody>
       </table>
       <p>
-        Means are <strong>sample-weighted</strong>: a verification with 1M
-        cells contributes 1M times to the bucket. Small windows of bad
-        weather shouldn't dominate the average just because they're more
-        frequent.
+        Continuous means (<code>maeMean</code>, <code>biasMean</code>,{" "}
+        <code>rmseMean</code>) are <strong>sample-weighted</strong>: a
+        verification with 1M cells contributes 1M times to the bucket.
+        Small windows of bad weather shouldn't dominate the average just
+        because they're more frequent.
+      </p>
+      <p>
+        Categorical scores (<code>pod</code> / <code>far</code> /{" "}
+        <code>csi</code>) compute on a <em>contingency table</em> stored
+        per verification — four counts of forecast/observed crossings of
+        the threshold (hits, misses, false alarms, correct negatives). The
+        aggregate <strong>sums</strong> the cells across rows then
+        computes the ratio at the end; averaging POD/FAR/CSI across rows
+        directly is wrong (the average of ratios isn't the ratio of
+        averages). When a bucket has no contributing categorical rows or
+        the denominator is zero, the route emits <code>null</code> rather
+        than a misleading 0.
       </p>
       <p>
         For trend-watching,{" "}
@@ -270,14 +293,17 @@ export default function ConceptsPage() {
         That's what the sparkline on{" "}
         <Link href="/calibration">/calibration</Link> charts: same Y-axis
         per row so a row's downward trend lines up with a peer's at a
-        glance.
+        glance. The metric switcher above the matrix swaps between MAE
+        (continuous error) and POD/FAR/CSI (skill at the configured
+        threshold).
       </p>
       <p>
         Per the plan §3.3, calibration is the <em>trust</em> signal nobody
         else in the dev-API weather space publishes. Brier scores and
-        reliability diagrams (probabilistic forecasts) land once we have an
-        ensemble forecaster; for now MAE / bias / RMSE on the persistence
-        baseline is honest enough to point a chart at.
+        reliability diagrams (probabilistic forecasts) land once we have
+        an ensemble forecaster; the deterministic equivalents — POD, FAR,
+        and CSI — already point honestly at how each algorithm handles
+        threshold crossings on the persistence and pySTEPS baselines.
       </p>
 
       <h2>Webhooks &amp; alert rules</h2>

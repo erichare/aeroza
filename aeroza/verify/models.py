@@ -58,6 +58,14 @@ class VerificationRow(Base):
     bias: Mapped[float] = mapped_column(Float, nullable=False)
     rmse: Mapped[float] = mapped_column(Float, nullable=False)
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Categorical (threshold-exceedance) metrics. Optional — older rows
+    # written before the column was added land here as NULL, which the
+    # aggregator interprets as "POD/FAR/CSI not available for this row".
+    threshold_dbz: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    misses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    false_alarms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    correct_negatives: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -68,6 +76,10 @@ class VerificationRow(Base):
         CheckConstraint(
             "sample_count >= 0",
             name="nowcast_verifications_sample_count_nonneg",
+        ),
+        CheckConstraint(
+            "hits >= 0 AND misses >= 0 AND false_alarms >= 0 AND correct_negatives >= 0",
+            name="nowcast_verifications_contingency_nonneg",
         ),
         UniqueConstraint(
             "nowcast_id",

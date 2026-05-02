@@ -46,11 +46,20 @@ async def _seed_verification(
     valid_at: datetime | None = None,
 ) -> uuid.UUID:
     """Insert source file + nowcast + verification rows. Returns the id of
-    the verification."""
+    the verification.
+
+    The keys carry a per-call random suffix so multiple seeds in the
+    same (algorithm, horizon) bucket don't collide on the
+    ``uq_nowcast_verifications_nowcast_observation`` constraint.
+    Tests that want sample-weighted aggregation over multiple
+    verifications rely on this — fixed keys would silently upsert
+    the second seed over the first.
+    """
     valid_at = valid_at or datetime(2026, 5, 1, 12, 30, tzinfo=UTC)
     src_at = valid_at - timedelta(minutes=horizon_minutes)
-    obs_key = f"obs-{horizon_minutes}-{algorithm}"
-    src_key = f"src-{horizon_minutes}-{algorithm}"
+    suffix = uuid.uuid4().hex[:6]
+    obs_key = f"obs-{horizon_minutes}-{algorithm}-{suffix}"
+    src_key = f"src-{horizon_minutes}-{algorithm}-{suffix}"
 
     async with integration_db.sessionmaker() as session:
         await upsert_mrms_files(
@@ -233,3 +242,129 @@ async def test_calibration_validates_window_hours_range(
     assert response.status_code == 422
     response = await api_client.get(ROUTE, params={"windowHours": 100_000})
     assert response.status_code == 422
+
+
+async def test_calibration_aggregates_pod_far_csi_from_contingency_table(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """Two verifications with the same threshold sum to the right
+    POD/FAR/CSI on the wire — averaging ratios would be wrong, but
+    summing the contingency table and computing on read is correct."""
+    # Row 1: 8 hits, 2 misses, 0 false alarms, 90 correct negatives.
+    #        POD=0.8, FAR=0.0, CSI=0.8.
+    await _seed_verification(
+        integration_db,
+        horizon_minutes=30,
+        metrics=DeterministicMetrics(
+            mae=2.0,
+            bias=0.0,
+            rmse=2.0,
+            sample_count=100,
+            threshold_dbz=35.0,
+            hits=8,
+            misses=2,
+            false_alarms=0,
+            correct_negatives=90,
+        ),
+    )
+    # Row 2: 10 hits, 0 misses, 5 false alarms, 85 correct negatives.
+    #        POD=1.0, FAR=0.333, CSI=0.667.
+    await _seed_verification(
+        integration_db,
+        horizon_minutes=30,
+        metrics=DeterministicMetrics(
+            mae=4.0,
+            bias=0.0,
+            rmse=4.0,
+            sample_count=100,
+            threshold_dbz=35.0,
+            hits=10,
+            misses=0,
+            false_alarms=5,
+            correct_negatives=85,
+        ),
+    )
+
+    response = await api_client.get(ROUTE)
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    item = items[0]
+    # Sums: 18 hits / 2 misses / 5 false alarms.
+    # POD = 18 / (18 + 2) = 0.9
+    # FAR = 5 / (18 + 5) ≈ 0.2174
+    # CSI = 18 / (18 + 2 + 5) = 0.72
+    assert item["thresholdDbz"] == pytest.approx(35.0)
+    assert item["pod"] == pytest.approx(18 / 20)
+    assert item["far"] == pytest.approx(5 / 23)
+    assert item["csi"] == pytest.approx(18 / 25)
+
+
+async def test_calibration_emits_null_pod_when_no_categorical_metrics(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """Old-style verification rows (threshold not set) round-trip
+    cleanly: pod/far/csi/thresholdDbz are null, mae/bias/rmse work
+    as before."""
+    await _seed_verification(
+        integration_db,
+        horizon_minutes=30,
+        metrics=DeterministicMetrics(
+            mae=1.0,
+            bias=0.0,
+            rmse=1.0,
+            sample_count=10,
+            # threshold_dbz=None on purpose — emulates a row that
+            # predates the migration / was scored without a threshold.
+        ),
+    )
+    response = await api_client.get(ROUTE)
+    item = response.json()["items"][0]
+    assert item["thresholdDbz"] is None
+    assert item["pod"] is None
+    assert item["far"] is None
+    assert item["csi"] is None
+    # Continuous metrics still populated.
+    assert item["maeMean"] == pytest.approx(1.0)
+
+
+async def test_calibration_emits_null_threshold_when_rows_disagree(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """If two rows in the same bucket scored at different thresholds,
+    the route can't safely surface one — null is the honest answer."""
+    await _seed_verification(
+        integration_db,
+        horizon_minutes=30,
+        metrics=DeterministicMetrics(
+            mae=1.0,
+            bias=0.0,
+            rmse=1.0,
+            sample_count=10,
+            threshold_dbz=35.0,
+            hits=1,
+            misses=0,
+            false_alarms=0,
+            correct_negatives=9,
+        ),
+    )
+    await _seed_verification(
+        integration_db,
+        horizon_minutes=30,
+        metrics=DeterministicMetrics(
+            mae=1.0,
+            bias=0.0,
+            rmse=1.0,
+            sample_count=10,
+            threshold_dbz=40.0,
+            hits=2,
+            misses=0,
+            false_alarms=0,
+            correct_negatives=8,
+        ),
+    )
+    response = await api_client.get(ROUTE)
+    item = response.json()["items"][0]
+    assert item["thresholdDbz"] is None
+    # POD/FAR/CSI still computable from summed counts (3 hits, 0 misses, 0 FA).
+    assert item["pod"] == pytest.approx(1.0)

@@ -65,13 +65,19 @@ The worker fetches the past observations from the catalog as part of each tick (
 
 Install: `uv sync --extra nowcast` (Linux works out of the box; macOS needs `brew install libomp`, since pysteps' `setup.py` uses raw `-fopenmp`). Tests use `pytest.importorskip("pysteps")` so the rest of the suite stays green without the install.
 
+### Phase 6b — categorical verification (POD / FAR / CSI)
+
+The verifier now scores each forecast against a configurable dBZ threshold (default **35 dBZ** — operational meteorology's "convective cell" cutoff) and stores a four-cell contingency table per row (`hits`, `misses`, `false_alarms`, `correct_negatives`). `GET /v1/calibration` and `GET /v1/calibration/series` surface POD / FAR / CSI on the wire, computed from the **summed** contingency table (averaging ratios across rows would be wrong). The `/calibration` dashboard's metric switcher swaps between MAE (continuous) and POD/FAR/CSI (categorical skill).
+
+This is the deterministic cousin of the probabilistic Brier / CRPS direction below: meaningful verification on existing deterministic forecasts (persistence + pySTEPS) without ensemble work.
+
 ## Up next (phase 6 continued)
 
 Workstreams roughly equal in priority. Reordering to taste; nothing is locked in.
 
 ### Ensemble forecasting → Brier / CRPS
 
-Now that we have a real algorithm in the pipeline, the next step on the verification side is multi-member ensemble runs (pysteps' STEPS mode supports them out of the box). Ensemble output unlocks proper probabilistic verification: Brier scores, reliability diagrams, CRPS — the trust signal Phase 3's calibration dashboard was originally pointed at. Goes hand-in-hand with a "champion / challenger" mechanism that calibrates new algorithms against persistence before promoting them.
+The next step on the *probabilistic* verification side is multi-member ensemble runs (pysteps' STEPS mode supports them out of the box). Ensemble output unlocks Brier scores, reliability diagrams, and CRPS — the proper probabilistic complement to the categorical POD/FAR/CSI scores phase 6b ships. Goes hand-in-hand with a "champion / challenger" mechanism that calibrates new algorithms against persistence before promoting them.
 
 ### Auth + API keys
 

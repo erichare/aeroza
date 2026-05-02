@@ -160,6 +160,11 @@ export interface Stats {
  * One row of the calibration aggregate. Per (algorithm × forecast horizon)
  * over the requested window. Sample-weighted means: a verification with
  * N=1M cells contributes N times to maeMean / biasMean / rmseMean.
+ *
+ * Categorical fields (`pod`, `far`, `csi`) are computed from the summed
+ * contingency table and are nullable: `null` means the contributing rows
+ * had no categorical metrics, or scored at mismatched thresholds, or the
+ * denominator was zero.
  */
 export interface CalibrationItem {
   algorithm: string;
@@ -169,6 +174,10 @@ export interface CalibrationItem {
   maeMean: number;
   biasMean: number;
   rmseMean: number;
+  thresholdDbz: number | null;
+  pod: number | null;
+  far: number | null;
+  csi: number | null;
 }
 
 export interface CalibrationResponse {
@@ -197,6 +206,10 @@ export interface CalibrationSeriesPoint {
   maeMean: number;
   biasMean: number;
   rmseMean: number;
+  thresholdDbz: number | null;
+  pod: number | null;
+  far: number | null;
+  csi: number | null;
 }
 
 /** Per-(algorithm × horizon) sparkline. Points are oldest → newest. */
