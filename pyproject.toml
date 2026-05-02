@@ -62,6 +62,7 @@ verify = [
 aeroza-ingest-alerts = "aeroza.cli.ingest_alerts:main"
 aeroza-ingest-mrms = "aeroza.cli.ingest_mrms:main"
 aeroza-materialise-mrms = "aeroza.cli.materialise_mrms:main"
+aeroza-dispatch-webhooks = "aeroza.cli.dispatch_webhooks:main"
 
 [dependency-groups]
 dev = [
