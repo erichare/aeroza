@@ -34,19 +34,22 @@ const SEVERITY_ORDER: Severity[] = [
 ];
 
 // Hex colors keyed off the same palette that powers SeverityBadge — kept here
-// because MapLibre paint expressions can't read CSS custom properties.
+// because MapLibre paint expressions can't read CSS custom properties. Tuned
+// for the light/parchment theme: deeper, more saturated than the dark-mode
+// versions so polygons still read on a cream basemap.
 const SEVERITY_FILL_COLOR: Record<Severity, string> = {
-  Extreme: "#f87171",
-  Severe: "#fbbf24",
-  Moderate: "#38bdfa",
-  Minor: "#34d399",
-  Unknown: "#94a3b8",
+  Extreme: "#b23524",   // terracotta red
+  Severe: "#c75c29",    // ember
+  Moderate: "#1e6f9e",  // ocean blue (semantic info — kept cool against warm palette)
+  Minor: "#5d8e35",     // deep olive
+  Unknown: "#7c6650",   // taupe
 };
 
-// CARTO's basemap raster tiles — free, attribution-required, dark theme that
-// matches the console palette. MapLibre doesn't interpolate Leaflet-style
-// `{a-c}` subdomain placeholders, so we list the three subdomains explicitly
-// and let MapLibre round-robin across them.
+// CARTO's basemap raster tiles — free, attribution-required. The
+// `voyager_nolabels` variant is a soft cream/grey base that matches the
+// parchment theme. MapLibre doesn't interpolate Leaflet-style `{a-c}`
+// subdomain placeholders, so we list the three explicitly and let it
+// round-robin.
 const CARTO_SUBDOMAINS = ["a", "b", "c"] as const;
 const cartoTiles = (style: string): string[] =>
   CARTO_SUBDOMAINS.map(
@@ -62,13 +65,13 @@ const STYLE: maplibregl.StyleSpecification = {
   sources: {
     "raster-base": {
       type: "raster",
-      tiles: cartoTiles("dark_nolabels"),
+      tiles: cartoTiles("voyager_nolabels"),
       tileSize: 256,
       attribution: RASTER_ATTRIBUTION,
     },
     "raster-labels": {
       type: "raster",
-      tiles: cartoTiles("dark_only_labels"),
+      tiles: cartoTiles("voyager_only_labels"),
       tileSize: 256,
     },
   },
@@ -176,8 +179,8 @@ export function AlertsMap({
           "fill-opacity": [
             "case",
             ["boolean", ["feature-state", "hover"], false],
-            0.55,
-            0.3,
+            0.6,
+            0.4,
           ],
         },
         // Push severe events on top so a Minor doesn't obscure an Extreme.

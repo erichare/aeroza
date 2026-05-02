@@ -1,6 +1,7 @@
 .PHONY: help install dev up down logs test test-unit test-integration test-cov \
         lint format typecheck check migrate migrate-down migration db-shell clean \
-        web-install web-dev web-build web-typecheck
+        web-install web-dev web-build web-typecheck \
+        ingest-alerts ingest-mrms materialise-mrms
 
 UV ?= uv
 
@@ -16,6 +17,15 @@ install: ## Sync Python dependencies via uv
 
 dev: ## Run the API with hot reload
 	$(UV) run uvicorn aeroza.main:app --reload --host 0.0.0.0 --port 8000
+
+ingest-alerts: ## Long-running NWS alerts poller (run alongside `make dev`)
+	$(UV) run aeroza-ingest-alerts
+
+ingest-mrms: ## Long-running MRMS file-catalog poller (run alongside `make dev`)
+	$(UV) run aeroza-ingest-mrms
+
+materialise-mrms: ## Long-running MRMS Zarr materialiser (run alongside `make dev`)
+	$(UV) run aeroza-materialise-mrms
 
 up: ## Start dev infrastructure (Postgres, Redis, NATS)
 	docker compose up -d

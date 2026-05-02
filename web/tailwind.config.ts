@@ -17,8 +17,11 @@ const config: Config = {
         danger: "rgb(var(--danger) / <alpha-value>)",
       },
       fontFamily: {
-        sans: ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas"],
+        // CSS-variable-driven so next/font controls preload + fallback chain.
+        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto"],
+        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas"],
+        // Editorial serif — apply via `.font-display` to h1 / h2 for warmth.
+        display: ["var(--font-display)", "Georgia", "serif"],
       },
     },
   },

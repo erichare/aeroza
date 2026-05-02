@@ -65,7 +65,7 @@ function Hero() {
       <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
         Aeroza · v0.1 · in development
       </span>
-      <h1 className="max-w-3xl text-5xl font-semibold tracking-tight text-text sm:text-6xl">
+      <h1 className="max-w-3xl font-display text-5xl font-semibold tracking-tight text-text sm:text-6xl">
         {HERO_TAGLINE}
       </h1>
       <p className="max-w-2xl text-base leading-relaxed text-muted sm:text-lg">
@@ -156,7 +156,7 @@ function StatusPill({ status }: { status: "ready" | "soon" }) {
 function BottomCta() {
   return (
     <section className="rounded-2xl border border-border/70 bg-surface/40 p-8 backdrop-blur">
-      <h2 className="text-xl font-semibold text-text">Try it against live data</h2>
+      <h2 className="font-display text-xl font-semibold text-text">Try it against live data</h2>
       <p className="mt-2 max-w-2xl text-sm text-muted">
         The dev console runs every public endpoint against a local FastAPI
         instance backed by NEXRAD CONUS data. Spin it up with{" "}

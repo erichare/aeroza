@@ -16,7 +16,7 @@ export default function CalibrationPage() {
         <span className="rounded-full border border-accent/40 bg-accent/10 self-start px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
           Public moat · §3.3
         </span>
-        <h1 className="text-2xl font-semibold tracking-tight text-text">
+        <h1 className="font-display text-3xl font-semibold tracking-tight text-text">
           Calibration
         </h1>
         <p className="max-w-3xl text-sm leading-relaxed text-muted">

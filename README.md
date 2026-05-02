@@ -20,7 +20,14 @@ uv sync
 docker compose up -d
 
 # Run the API
-uv run uvicorn aeroza.main:app --reload
+make dev
+
+# In separate terminals, start the long-running ingesters so the API
+# surface has live data to serve. The `aeroza-*` CLIs are also fine if
+# you'd rather not use make.
+make ingest-alerts        # NWS active alerts → /v1/alerts*
+make ingest-mrms          # MRMS file catalog → /v1/mrms/files
+make materialise-mrms     # MRMS GRIB2 → Zarr → /v1/mrms/grids*
 
 # Run tests
 uv run pytest
