@@ -79,18 +79,14 @@ def _render_rgba(
         ds.close()
 
 
-def _sample_into_tile(
-    da: xr.DataArray, *, bounds: TileBounds, tile_size: int
-) -> np.ndarray:
+def _sample_into_tile(da: xr.DataArray, *, bounds: TileBounds, tile_size: int) -> np.ndarray:
     """Project the grid into the tile's pixel grid via nearest neighbor."""
     grid_lats = np.asarray(da["latitude"].values, dtype=np.float64)
     grid_lngs = np.asarray(da["longitude"].values, dtype=np.float64)
     values = np.asarray(da.values, dtype=np.float32)
 
     if values.ndim != 2:
-        raise ValueError(
-            f"expected 2D grid, got dims={da.dims} shape={values.shape}"
-        )
+        raise ValueError(f"expected 2D grid, got dims={da.dims} shape={values.shape}")
 
     # MRMS axes typically descend (north→south for latitude). The
     # nearest-neighbor index math expects ascending; if descending,
@@ -120,9 +116,7 @@ def _sample_into_tile(
     return reflectivity_to_rgba(sampled)
 
 
-def _to_grid_longitude(
-    lngs: np.ndarray, grid_lngs: np.ndarray
-) -> np.ndarray:
+def _to_grid_longitude(lngs: np.ndarray, grid_lngs: np.ndarray) -> np.ndarray:
     """If the grid uses ``[0, 360)`` longitudes (MRMS native), shift
     negative request longitudes into that range. Otherwise pass through.
 

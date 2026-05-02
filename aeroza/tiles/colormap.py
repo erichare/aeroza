@@ -19,7 +19,7 @@ import numpy as np
 # (dBZ stop, R, G, B) — sorted ascending. The last stop is held flat for
 # anything stronger.
 DBZ_STOPS: Final[tuple[tuple[float, int, int, int], ...]] = (
-    (5.0, 4, 233, 231),       # < 5 → transparent (handled separately); 5 dBZ first visible
+    (5.0, 4, 233, 231),  # < 5 → transparent (handled separately); 5 dBZ first visible
     (10.0, 1, 159, 244),
     (15.0, 3, 0, 244),
     (20.0, 2, 253, 2),
