@@ -193,21 +193,31 @@ async def test_series_filters_window(api_client: AsyncClient, integration_db: Da
 async def test_series_buckets_use_requested_width(
     api_client: AsyncClient, integration_db: Database
 ) -> None:
-    """Two rows in the same hour collapse to one point at hourly width;
-    they should split when we ask for a 5-minute bucket."""
+    """Two rows inside the same hour collapse to one point at hourly width;
+    they should split when we ask for a 5-minute bucket.
+
+    Anchor both seeds 15 and 25 minutes after a fixed-on-the-hour
+    reference so the pair can never straddle an hour boundary —
+    earlier the test used ``now - 30 min`` as the floor, which was
+    flaky depending on what minute of the hour CI ran in.
+    """
     now = datetime.now(UTC)
-    base = now - timedelta(minutes=30)
+    # Floor `now` to the start of its hour, then take the hour before
+    # that so both seed times land safely inside one hour and both are
+    # inside the default 24h window.
+    hour_floor = now.replace(minute=0, second=0, microsecond=0)
+    base = hour_floor - timedelta(hours=1)
     await _seed_verification(
         integration_db,
         horizon_minutes=30,
         metrics=DeterministicMetrics(mae=2.0, bias=0.0, rmse=2.0, sample_count=100),
-        verified_at=base,
+        verified_at=base + timedelta(minutes=15),
     )
     await _seed_verification(
         integration_db,
         horizon_minutes=30,
         metrics=DeterministicMetrics(mae=4.0, bias=0.0, rmse=4.0, sample_count=100),
-        verified_at=base + timedelta(minutes=10),
+        verified_at=base + timedelta(minutes=25),
     )
 
     hourly = await api_client.get(ROUTE, params={"windowHours": 24, "bucketSeconds": 3600})
