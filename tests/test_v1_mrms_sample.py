@@ -141,8 +141,9 @@ async def test_samples_latest_grid_when_multiple_exist(
     # Newer grid: same shape but every value bumped by 100 so we can tell them apart.
     newer_path = tmp_path / "newer.zarr"
     da = xr.DataArray(
-        np.array([[101.0, 102.0, 103.0], [104.0, 105.0, 106.0], [107.0, 108.0, 109.0]],
-                 dtype=np.float32),
+        np.array(
+            [[101.0, 102.0, 103.0], [104.0, 105.0, 106.0], [107.0, 108.0, 109.0]], dtype=np.float32
+        ),
         coords={"latitude": [20.0, 20.5, 21.0], "longitude": [-100.0, -99.5, -99.0]},
         dims=("latitude", "longitude"),
         name="reflectivity",

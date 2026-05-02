@@ -87,9 +87,7 @@ async def _persisted_keys(integration_db: Database) -> set[str]:
     return {r.file_key for r in rows}
 
 
-async def test_event_triggers_materialise_tick(
-    integration_db: Database, tmp_path: Path
-) -> None:
+async def test_event_triggers_materialise_tick(integration_db: Database, tmp_path: Path) -> None:
     """Pushing a file event causes the unmaterialised file to land as Zarr."""
     a = _file(suffix="120000")
     await _seed_files(integration_db, a)
