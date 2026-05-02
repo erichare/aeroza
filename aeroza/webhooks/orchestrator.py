@@ -54,12 +54,14 @@ from aeroza.shared.db import Database
 from aeroza.stream.nats import (
     MRMS_NEW_FILE_SUBJECT,
     MRMS_NEW_GRID_SUBJECT,
+    NOWCAST_NEW_GRID_SUBJECT,
     NWS_NEW_ALERT_SUBJECT,
 )
 from aeroza.stream.subscriber import (
     AlertSubscriber,
     MrmsFileSubscriber,
     MrmsGridSubscriber,
+    NowcastGridSubscriber,
 )
 from aeroza.webhooks.delivery import (
     DeliveryOutcome,
@@ -96,15 +98,15 @@ async def run_dispatcher(
     alert_subscriber: AlertSubscriber,
     file_subscriber: MrmsFileSubscriber,
     grid_subscriber: MrmsGridSubscriber,
+    nowcast_subscriber: NowcastGridSubscriber,
     auto_disable_threshold: int = AUTO_DISABLE_CONSECUTIVE_FAILURES,
 ) -> None:
     """Run the dispatcher until every consumer's stream ends.
 
-    Returns when all three consumers have completed (e.g. the
-    in-memory subscribers' ``close()`` was called, or the broker
-    disconnected). Per-event exceptions inside a consumer are logged
-    but never propagate out — one bad delivery must not tear the
-    worker down.
+    Returns when every consumer has completed (e.g. the in-memory
+    subscribers' ``close()`` was called, or the broker disconnected).
+    Per-event exceptions inside a consumer are logged but never
+    propagate out — one bad delivery must not tear the worker down.
     """
     log.info("webhooks.dispatcher.start")
     try:
@@ -120,6 +122,10 @@ async def run_dispatcher(
             tg.create_task(
                 _consume_grids(db, http_client, grid_subscriber, auto_disable_threshold),
                 name="webhooks.dispatcher.grids",
+            )
+            tg.create_task(
+                _consume_nowcasts(db, http_client, nowcast_subscriber, auto_disable_threshold),
+                name="webhooks.dispatcher.nowcasts",
             )
     finally:
         log.info("webhooks.dispatcher.stop")
@@ -208,6 +214,37 @@ async def _consume_grids(
             log.exception(
                 "webhooks.dispatcher.rule_eval_failed",
                 key=locator.file_key,
+                error=str(exc),
+            )
+
+
+async def _consume_nowcasts(
+    db: Database,
+    http_client: httpx.AsyncClient,
+    subscriber: NowcastGridSubscriber,
+    auto_disable_threshold: int,
+) -> None:
+    """Fan out ``aeroza.nowcast.grids.new`` envelopes to opted-in subs.
+
+    The wire payload is a plain dict (the JSON the nowcast publisher
+    emits), so we forward it as ``data`` unchanged. No rule evaluation
+    runs on nowcast events — alert rules evaluate against observation
+    grids, not predictions. Webhook subscribers that want predictions
+    delivered opt in via the ``events`` array.
+    """
+    async for envelope in subscriber.subscribe_new_nowcasts():
+        try:
+            await dispatch_event(
+                db,
+                http_client,
+                event_type=NOWCAST_NEW_GRID_SUBJECT,
+                event_data=envelope,
+                auto_disable_threshold=auto_disable_threshold,
+            )
+        except Exception as exc:
+            log.exception(
+                "webhooks.dispatcher.nowcast_event_failed",
+                envelope_id=envelope.get("id") if isinstance(envelope, dict) else None,
                 error=str(exc),
             )
 

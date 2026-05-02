@@ -37,12 +37,14 @@ from pydantic import ValidationError
 from aeroza.ingest.mrms import MrmsFile
 from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.ingest.nws_alerts import Alert
+from aeroza.nowcast.models import NowcastRow
 
 log = structlog.get_logger(__name__)
 
 NWS_NEW_ALERT_SUBJECT: Final[str] = "aeroza.alerts.nws.new"
 MRMS_NEW_FILE_SUBJECT: Final[str] = "aeroza.mrms.files.new"
 MRMS_NEW_GRID_SUBJECT: Final[str] = "aeroza.mrms.grids.new"
+NOWCAST_NEW_GRID_SUBJECT: Final[str] = "aeroza.nowcast.grids.new"
 
 
 class NatsPublisher(Protocol):
@@ -330,6 +332,111 @@ class NatsMrmsGridSubscriber:
         finally:
             await sub.unsubscribe()
             log.debug("nats.mrms_grid.unsubscribe", subject=self._subject)
+
+
+def _encode_nowcast_row(row: NowcastRow) -> bytes:
+    """Wire shape for ``aeroza.nowcast.grids.new`` events.
+
+    Camel-cased keys mirror the ``/v1/nowcasts`` HTTP response so a
+    consumer that already parses the catalog list can reuse its types.
+    Lists for ``dims``/``shape`` are eagerly materialised — the JSONB
+    column they came from is opaque.
+    """
+    import json
+
+    dims = row.dims_json if isinstance(row.dims_json, list) else json.loads(row.dims_json)
+    shape = row.shape_json if isinstance(row.shape_json, list) else json.loads(row.shape_json)
+    return json.dumps(
+        {
+            "id": str(row.id),
+            "sourceFileKey": row.source_file_key,
+            "product": row.product,
+            "level": row.level,
+            "algorithm": row.algorithm,
+            "forecastHorizonMinutes": row.forecast_horizon_minutes,
+            "validAt": row.valid_at.isoformat(),
+            "zarrUri": row.zarr_uri,
+            "variable": row.variable,
+            "dims": list(dims),
+            "shape": list(shape),
+            "dtype": row.dtype,
+            "nbytes": row.nbytes,
+            "generatedAt": row.generated_at.isoformat() if row.generated_at else None,
+        }
+    ).encode("utf-8")
+
+
+def _decode_nowcast_row_envelope(data: bytes) -> dict[str, Any]:
+    """Parse the JSON wire payload back into a plain dict. We don't
+    rebuild a :class:`NowcastRow` because the SQLAlchemy ORM can't be
+    instantiated from camelCase keys, and downstream consumers (the
+    webhook dispatcher) don't need the ORM shape — just the data."""
+    obj: dict[str, Any] = json.loads(data)
+    return obj
+
+
+class NatsNowcastGridPublisher:
+    """Publishes one NATS message per newly-persisted nowcast row."""
+
+    def __init__(
+        self,
+        client: NatsPublisher,
+        *,
+        subject: str = NOWCAST_NEW_GRID_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def publish_new_nowcast(self, row: NowcastRow) -> None:
+        payload = _encode_nowcast_row(row)
+        await self._client.publish(self._subject, payload)
+        log.debug(
+            "nats.nowcast.publish",
+            subject=self._subject,
+            id=str(row.id),
+            algorithm=row.algorithm,
+            horizon_minutes=row.forecast_horizon_minutes,
+            bytes=len(payload),
+        )
+
+
+class NatsNowcastGridSubscriber:
+    """Yields nowcast envelopes (decoded JSON dicts) from a NATS subject."""
+
+    def __init__(
+        self,
+        client: NatsSubscriberClient,
+        *,
+        subject: str = NOWCAST_NEW_GRID_SUBJECT,
+    ) -> None:
+        self._client = client
+        self._subject = subject
+
+    @property
+    def subject(self) -> str:
+        return self._subject
+
+    async def subscribe_new_nowcasts(self) -> AsyncIterator[dict[str, Any]]:
+        sub = await self._client.subscribe(self._subject)
+        log.debug("nats.nowcast.subscribe", subject=self._subject)
+        try:
+            async for msg in sub.messages:
+                data: bytes = getattr(msg, "data", b"")
+                try:
+                    yield _decode_nowcast_row_envelope(data)
+                except (ValueError, KeyError) as exc:
+                    log.warning(
+                        "nats.nowcast.subscribe.bad_payload",
+                        subject=self._subject,
+                        error=str(exc),
+                    )
+        finally:
+            await sub.unsubscribe()
+            log.debug("nats.nowcast.unsubscribe", subject=self._subject)
 
 
 @asynccontextmanager

@@ -28,6 +28,7 @@ from aeroza.stream.nats import (
     NatsAlertSubscriber,
     NatsMrmsFileSubscriber,
     NatsMrmsGridSubscriber,
+    NatsNowcastGridSubscriber,
     nats_connection,
 )
 from aeroza.webhooks.orchestrator import (
@@ -93,6 +94,7 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
             alert_subscriber = NatsAlertSubscriber(nats_client)
             file_subscriber = NatsMrmsFileSubscriber(nats_client)
             grid_subscriber = NatsMrmsGridSubscriber(nats_client)
+            nowcast_subscriber = NatsNowcastGridSubscriber(nats_client)
 
             stopper = asyncio.Event()
             _install_signal_handlers(stopper)
@@ -103,6 +105,7 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
                     alert_subscriber=alert_subscriber,
                     file_subscriber=file_subscriber,
                     grid_subscriber=grid_subscriber,
+                    nowcast_subscriber=nowcast_subscriber,
                     auto_disable_threshold=args.auto_disable_threshold,
                 ),
                 name="webhooks.dispatcher",

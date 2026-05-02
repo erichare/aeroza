@@ -64,7 +64,9 @@ def _locator(
 async def _truncate_after(integration_db: Database) -> object:
     yield
     async with integration_db.sessionmaker() as session:
-        await session.execute(text("TRUNCATE TABLE mrms_grids, mrms_files"))
+        # CASCADE so child tables (mrms_nowcasts, alert rules' bound rows
+        # via webhook_subscriptions) drop with the parents.
+        await session.execute(text("TRUNCATE TABLE mrms_grids, mrms_files CASCADE"))
         await session.commit()
 
 
