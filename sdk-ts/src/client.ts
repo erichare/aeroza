@@ -20,6 +20,8 @@ import type {
   AlertQuery,
   CalibrationQuery,
   CalibrationResponse,
+  CalibrationSeriesQuery,
+  CalibrationSeriesResponse,
   Health,
   MrmsFileList,
   MrmsGridItem,
@@ -194,6 +196,24 @@ export class AeroaClient {
     if (query.level) params.set("level", query.level);
     return this.getJson<CalibrationResponse>(
       this.withQuery("/v1/calibration", params),
+    );
+  }
+
+  async getCalibrationSeries(
+    query: CalibrationSeriesQuery = {},
+  ): Promise<CalibrationSeriesResponse> {
+    const params = new URLSearchParams();
+    if (query.windowHours !== undefined) {
+      params.set("windowHours", String(query.windowHours));
+    }
+    if (query.bucketSeconds !== undefined) {
+      params.set("bucketSeconds", String(query.bucketSeconds));
+    }
+    if (query.algorithm) params.set("algorithm", query.algorithm);
+    if (query.product) params.set("product", query.product);
+    if (query.level) params.set("level", query.level);
+    return this.getJson<CalibrationSeriesResponse>(
+      this.withQuery("/v1/calibration/series", params),
     );
   }
 

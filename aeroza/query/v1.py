@@ -29,6 +29,8 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
 - ``GET /v1/calibration`` — aggregate verification metrics (MAE / bias
   / RMSE) over a time window, grouped by algorithm × horizon. The
   public face of the §3.3 moat.
+- ``GET /v1/calibration/series`` — same metrics, time-bucketed so the
+  front-end can chart MAE / bias / RMSE evolution per algorithm.
 - ``GET /v1/stats`` — compact health-style snapshot of how much data the
   system currently knows about (alerts active/total, MRMS files,
   materialised grids, and freshness watermarks).
@@ -121,12 +123,17 @@ from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
 from aeroza.tiles.raster import render_tile_png, transparent_tile_png
 from aeroza.verify.schemas import (
     CalibrationResponse,
+    CalibrationSeriesResponse,
     calibration_buckets_to_response,
+    calibration_points_to_series,
 )
 from aeroza.verify.store import (
     DEFAULT_AGGREGATE_WINDOW_HOURS as CALIBRATION_DEFAULT_WINDOW_HOURS,
 )
-from aeroza.verify.store import aggregate_calibration
+from aeroza.verify.store import (
+    DEFAULT_BUCKET_SECONDS as CALIBRATION_DEFAULT_BUCKET_SECONDS,
+)
+from aeroza.verify.store import aggregate_calibration, aggregate_calibration_series
 
 log = structlog.get_logger(__name__)
 
@@ -931,4 +938,82 @@ async def get_calibration_route(
         list(buckets),
         generated_at=now,
         window_hours=window_hours,
+    )
+
+
+# Bucket bounds: between 5 min (rate-limit storm) and 1 day (any wider
+# and a sparkline collapses to a single point per series).
+_CALIBRATION_BUCKET_MIN_SECONDS: int = 300
+_CALIBRATION_BUCKET_MAX_SECONDS: int = 86_400
+
+
+@router.get(
+    "/calibration/series",
+    response_model=CalibrationSeriesResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["calibration"],
+    summary="Time-series calibration metrics, per (algorithm × horizon × bucket)",
+    description=(
+        "Sparkline-shaped companion to ``/v1/calibration``: same sample-"
+        "weighted means, but each (algorithm, forecastHorizonMinutes) "
+        "row carries an ordered list of bucketed points so the front-end "
+        "can chart how MAE moves over the window.\n\n"
+        "``bucketSeconds`` controls bucket width (default 1 h). Series "
+        "are sorted ``(algorithm, horizon, bucketStart)`` so the wire "
+        "shape is render-ready."
+    ),
+)
+async def get_calibration_series_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    window_hours: Annotated[
+        int,
+        Query(
+            alias="windowHours",
+            ge=1,
+            le=24 * 30,
+            description=f"Lookback window in hours (default {CALIBRATION_DEFAULT_WINDOW_HOURS}).",
+        ),
+    ] = CALIBRATION_DEFAULT_WINDOW_HOURS,
+    bucket_seconds: Annotated[
+        int,
+        Query(
+            alias="bucketSeconds",
+            ge=_CALIBRATION_BUCKET_MIN_SECONDS,
+            le=_CALIBRATION_BUCKET_MAX_SECONDS,
+            description=(
+                f"Bucket width in seconds (default {CALIBRATION_DEFAULT_BUCKET_SECONDS}, "
+                f"min {_CALIBRATION_BUCKET_MIN_SECONDS}, max {_CALIBRATION_BUCKET_MAX_SECONDS})."
+            ),
+        ),
+    ] = CALIBRATION_DEFAULT_BUCKET_SECONDS,
+    algorithm: Annotated[
+        str | None,
+        Query(description="Filter to one algorithm tag (e.g. 'persistence')"),
+    ] = None,
+    product: Annotated[
+        str | None,
+        Query(description="Filter to one product (e.g. 'MergedReflectivityComposite')"),
+    ] = None,
+    level: Annotated[
+        str | None,
+        Query(description="Filter to one product level (e.g. '00.50')"),
+    ] = None,
+) -> CalibrationSeriesResponse:
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=window_hours)
+    points = await aggregate_calibration_series(
+        session,
+        since=since,
+        bucket_seconds=bucket_seconds,
+        algorithm=algorithm,
+        product=product,
+        level=level,
+        window_hours=window_hours,
+    )
+    return calibration_points_to_series(
+        points,
+        generated_at=now,
+        window_hours=window_hours,
+        bucket_seconds=bucket_seconds,
     )

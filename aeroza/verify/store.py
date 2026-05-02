@@ -174,9 +174,141 @@ async def aggregate_calibration(
     return tuple(buckets)
 
 
+# --------------------------------------------------------------------------- #
+# Time-series aggregation                                                     #
+# --------------------------------------------------------------------------- #
+
+# Default time-bucket size for calibration sparklines. One hour is the
+# sweet spot for a 24h window: 24 points per series gives a readable
+# trend without looking pixel-noisy.
+DEFAULT_BUCKET_SECONDS: Final[int] = 3600
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationSeriesPoint:
+    """One time-bucket aggregate for the calibration sparkline.
+
+    ``bucket_start`` is the inclusive lower edge of the bucket
+    (``date_trunc(bucket, verified_at)``). ``bucket_seconds`` is fixed
+    by the caller; rows in a bucket are aggregated the same way as
+    :func:`aggregate_calibration` (sample-weighted means).
+    """
+
+    algorithm: str
+    forecast_horizon_minutes: int
+    bucket_start: datetime
+    verification_count: int
+    sample_count: int
+    mae_mean: float
+    bias_mean: float
+    rmse_mean: float
+
+
+async def aggregate_calibration_series(
+    session: AsyncSession,
+    *,
+    since: datetime | None = None,
+    bucket_seconds: int = DEFAULT_BUCKET_SECONDS,
+    product: str | None = None,
+    level: str | None = None,
+    algorithm: str | None = None,
+    window_hours: int = DEFAULT_AGGREGATE_WINDOW_HOURS,
+) -> Sequence[CalibrationSeriesPoint]:
+    """Time-bucketed sample-weighted aggregate of ``nowcast_verifications``.
+
+    Grouped by ``(algorithm, forecast_horizon_minutes, bucket_start)``,
+    where ``bucket_start = to_timestamp(floor(epoch / bucket_seconds) * bucket_seconds)``.
+    Using floor-based bucketing rather than ``date_trunc`` lets callers
+    request arbitrary bucket sizes (10 min, 6 h, etc.) without picking
+    from a fixed Postgres-flavour list.
+
+    The result is sorted by ``(algorithm, horizon, bucket_start)`` so the
+    front-end can build sparklines without re-sorting.
+    """
+    if since is None:
+        since = datetime.now().astimezone() - timedelta(hours=window_hours)
+    if bucket_seconds <= 0:
+        raise ValueError(f"bucket_seconds must be positive, got {bucket_seconds}")
+
+    # `to_timestamp(floor(epoch / N) * N)` snaps every row to the start
+    # of its bucket. Cast verified_at to epoch via extract().
+    bucket_expr = func.to_timestamp(
+        func.floor(
+            func.extract("epoch", VerificationRow.verified_at) / bucket_seconds
+        )
+        * bucket_seconds
+    ).label("bucket_start")
+
+    weighted_mae = func.sum(VerificationRow.mae * VerificationRow.sample_count)
+    weighted_bias = func.sum(VerificationRow.bias * VerificationRow.sample_count)
+    weighted_rmse = func.sum(VerificationRow.rmse * VerificationRow.sample_count)
+    total_samples = func.sum(VerificationRow.sample_count)
+
+    def safe_div(numer: Any) -> Any:
+        return case((total_samples > 0, numer / total_samples), else_=0.0)
+
+    stmt = (
+        select(
+            VerificationRow.algorithm,
+            VerificationRow.forecast_horizon_minutes,
+            bucket_expr,
+            func.count(VerificationRow.id).label("verification_count"),
+            total_samples.label("sample_count"),
+            safe_div(weighted_mae).label("mae_mean"),
+            safe_div(weighted_bias).label("bias_mean"),
+            safe_div(weighted_rmse).label("rmse_mean"),
+        )
+        .where(VerificationRow.verified_at >= since)
+        .group_by(
+            VerificationRow.algorithm,
+            VerificationRow.forecast_horizon_minutes,
+            bucket_expr,
+        )
+        .order_by(
+            VerificationRow.algorithm,
+            VerificationRow.forecast_horizon_minutes,
+            bucket_expr,
+        )
+    )
+    if product is not None:
+        stmt = stmt.where(VerificationRow.product == product)
+    if level is not None:
+        stmt = stmt.where(VerificationRow.level == level)
+    if algorithm is not None:
+        stmt = stmt.where(VerificationRow.algorithm == algorithm)
+
+    result = await session.execute(stmt)
+    points: list[CalibrationSeriesPoint] = []
+    for row in result.mappings():
+        bucket_start = row["bucket_start"]
+        # `to_timestamp` returns a tz-aware datetime when the input
+        # column is TIMESTAMPTZ; defensively coerce naive values to UTC
+        # so callers can rely on isoformat() with offset.
+        if bucket_start.tzinfo is None:
+            from datetime import UTC
+
+            bucket_start = bucket_start.replace(tzinfo=UTC)
+        points.append(
+            CalibrationSeriesPoint(
+                algorithm=row["algorithm"],
+                forecast_horizon_minutes=int(row["forecast_horizon_minutes"]),
+                bucket_start=bucket_start,
+                verification_count=int(row["verification_count"]),
+                sample_count=int(row["sample_count"] or 0),
+                mae_mean=float(row["mae_mean"] or 0.0),
+                bias_mean=float(row["bias_mean"] or 0.0),
+                rmse_mean=float(row["rmse_mean"] or 0.0),
+            )
+        )
+    return tuple(points)
+
+
 __all__ = [
     "DEFAULT_AGGREGATE_WINDOW_HOURS",
+    "DEFAULT_BUCKET_SECONDS",
     "CalibrationBucket",
+    "CalibrationSeriesPoint",
     "aggregate_calibration",
+    "aggregate_calibration_series",
     "upsert_verification",
 ]

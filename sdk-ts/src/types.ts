@@ -186,6 +186,44 @@ export interface CalibrationQuery {
   level?: string;
 }
 
+/**
+ * One time-bucket of metrics on a calibration sparkline.
+ * `bucketStart` is the inclusive lower edge (ISO timestamp).
+ */
+export interface CalibrationSeriesPoint {
+  bucketStart: string;
+  verificationCount: number;
+  sampleCount: number;
+  maeMean: number;
+  biasMean: number;
+  rmseMean: number;
+}
+
+/** Per-(algorithm × horizon) sparkline. Points are oldest → newest. */
+export interface CalibrationSeriesItem {
+  algorithm: string;
+  forecastHorizonMinutes: number;
+  points: CalibrationSeriesPoint[];
+}
+
+export interface CalibrationSeriesResponse {
+  type: "CalibrationSeries";
+  generatedAt: string;
+  windowHours: number;
+  bucketSeconds: number;
+  items: CalibrationSeriesItem[];
+}
+
+export interface CalibrationSeriesQuery {
+  /** Default: 24h. */
+  windowHours?: number;
+  /** Default: 3600 (1 hour). Server allows [300, 86400]. */
+  bucketSeconds?: number;
+  algorithm?: string;
+  product?: string;
+  level?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Query parameters
 

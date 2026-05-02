@@ -20,6 +20,8 @@ import {
   type AlertQuery,
   type CalibrationQuery,
   type CalibrationResponse,
+  type CalibrationSeriesQuery,
+  type CalibrationSeriesResponse,
   type Health,
   type MrmsFileList,
   type MrmsGridList,
@@ -49,6 +51,10 @@ export type {
   CalibrationItem,
   CalibrationQuery,
   CalibrationResponse,
+  CalibrationSeriesItem,
+  CalibrationSeriesPoint,
+  CalibrationSeriesQuery,
+  CalibrationSeriesResponse,
   GeoJsonGeometry,
   Health,
   MrmsFileItem,
@@ -112,6 +118,12 @@ export function fetchCalibration(
   query: CalibrationQuery = {},
 ): Promise<CalibrationResponse> {
   return client.getCalibration(query);
+}
+
+export function fetchCalibrationSeries(
+  query: CalibrationSeriesQuery = {},
+): Promise<CalibrationSeriesResponse> {
+  return client.getCalibrationSeries(query);
 }
 
 /**
