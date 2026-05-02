@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Aeroza dev console palette.
+ * Stored as raw RGB triples (not hex) so Tailwind's `<alpha-value>` syntax
+ * can mix in opacity (e.g. `bg-surface/60`).
+ */
+:root {
+  --bg: 8 12 22;
+  --surface: 17 24 39;
+  --border: 31 41 55;
+  --muted: 148 163 184;
+  --text: 226 232 240;
+  --accent: 56 189 248;
+  --success: 52 211 153;
+  --warning: 251 191 36;
+  --danger: 248 113 113;
+}
+
+html,
+body {
+  background-color: rgb(var(--bg));
+  color: rgb(var(--text));
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(1200px 600px at 10% -10%, rgba(56, 189, 248, 0.08), transparent 60%),
+    radial-gradient(1000px 800px at 110% 0%, rgba(52, 211, 153, 0.05), transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Custom scrollbar — minimal, dark, console-feel. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--border)) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--border));
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--muted));
+}
+
+/* Subtle pulse for "live" indicators. */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

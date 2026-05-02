@@ -1,5 +1,6 @@
 .PHONY: help install dev up down logs test test-unit test-integration test-cov \
-        lint format typecheck check migrate migrate-down migration db-shell clean
+        lint format typecheck check migrate migrate-down migration db-shell clean \
+        web-install web-dev web-build web-typecheck
 
 UV ?= uv
 
@@ -68,3 +69,17 @@ db-shell: ## psql into the dev database
 clean: ## Remove caches and build artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build *.egg-info
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+# --- Dev console (Next.js) -------------------------------------------------
+
+web-install: ## Install dev-console npm dependencies
+	cd web && npm install
+
+web-dev: ## Run the Next.js dev console on :3000 (needs `make dev` running)
+	cd web && npm run dev
+
+web-build: ## Production-build the dev console
+	cd web && npm run build
+
+web-typecheck: ## Type-check the dev console
+	cd web && npm run typecheck
