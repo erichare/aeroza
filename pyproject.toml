@@ -61,6 +61,7 @@ verify = [
 [project.scripts]
 aeroza-ingest-alerts = "aeroza.cli.ingest_alerts:main"
 aeroza-ingest-mrms = "aeroza.cli.ingest_mrms:main"
+aeroza-materialise-mrms = "aeroza.cli.materialise_mrms:main"
 
 [dependency-groups]
 dev = [
