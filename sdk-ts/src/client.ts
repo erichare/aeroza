@@ -69,7 +69,7 @@ export class AeroaClient {
   private readonly defaultHeaders: Record<string, string>;
 
   constructor(options: AeroaClientOptions) {
-    this.apiBase = options.apiBase.replace(/\/+$/, "");
+    this.apiBase = stripTrailingSlashes(options.apiBase);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.defaultHeaders = options.defaultHeaders ?? {};
   }
@@ -215,6 +215,19 @@ export class AeroaClient {
     }
     return (await response.json()) as T;
   }
+}
+
+/**
+ * Trim every trailing slash from ``input``. A linear-time scan that
+ * avoids regex-based polynomial-ReDoS surface for callers passing a
+ * pathological apiBase (e.g. ``"http://x" + "/".repeat(1e6)``).
+ */
+function stripTrailingSlashes(input: string): string {
+  let end = input.length;
+  while (end > 0 && input.charCodeAt(end - 1) === 47 /* '/' */) {
+    end -= 1;
+  }
+  return end === input.length ? input : input.slice(0, end);
 }
 
 function buildMrmsParams(query: MrmsQuery): URLSearchParams {
