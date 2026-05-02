@@ -1,6 +1,7 @@
 import { AlertsStreamPanel } from "@/components/AlertsStreamPanel";
 import { HealthPanel } from "@/components/HealthPanel";
 import { MrmsFilesPanel } from "@/components/MrmsFilesPanel";
+import { MrmsGridsPanel } from "@/components/MrmsGridsPanel";
 
 export default function ConsolePage() {
   return (
@@ -26,6 +27,7 @@ export default function ConsolePage() {
           <Link href="/docs" label="OpenAPI / Swagger" />
           <Link href="/v1/alerts" label="GET /v1/alerts" />
           <Link href="/v1/mrms/files" label="GET /v1/mrms/files" />
+          <Link href="/v1/mrms/grids" label="GET /v1/mrms/grids" />
         </nav>
       </header>
 
@@ -36,6 +38,9 @@ export default function ConsolePage() {
         <HealthPanel />
         <div className="lg:col-span-3">
           <MrmsFilesPanel />
+        </div>
+        <div className="lg:col-span-3">
+          <MrmsGridsPanel />
         </div>
       </div>
 
