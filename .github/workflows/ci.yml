@@ -55,7 +55,7 @@ jobs:
           if-no-files-found: ignore
 
   integration:
-    name: integration tests (Postgres+PostGIS)
+    name: integration tests (Postgres+PostGIS, eccodes)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: unit
@@ -90,16 +90,25 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
 
+      - name: Install eccodes (for cfgrib / @pytest.mark.grib)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeccodes-dev
+
       - name: Sync dependencies
-        run: uv sync --all-extras --frozen || uv sync --all-extras
+        run: |
+          uv sync --all-extras --extra grib --frozen \
+            || uv sync --all-extras --extra grib
 
       - name: Create test database
         run: |
           PGPASSWORD=aeroza psql -h localhost -U aeroza -d postgres \
             -c "CREATE DATABASE aeroza_test"
 
-      - name: Run integration tests
-        run: uv run pytest -m integration --cov=aeroza --cov-report=xml --cov-report=term
+      - name: Run integration + grib tests
+        run: |
+          uv run pytest -m "integration or grib" \
+            --cov=aeroza --cov-report=xml --cov-report=term
 
       - name: Upload coverage
         if: always()

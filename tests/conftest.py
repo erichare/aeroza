@@ -94,6 +94,58 @@ async def alert_subscriber() -> AsyncIterator[InMemoryAlertSubscriber]:
     await subscriber.close()
 
 
+@pytest_asyncio.fixture(scope="session")
+async def grib_payload() -> AsyncIterator[bytes]:
+    """Real MRMS GRIB2 payload, fetched once per session for ``@pytest.mark.grib``.
+
+    Skips the test when:
+    - cfgrib / eccodes aren't installed (``import cfgrib`` fails);
+    - we can't reach the public ``noaa-mrms-pds`` bucket;
+    - the bucket has no fresh ``PrecipRate`` files (very rare — published every
+      ~2 minutes, but a fallback to "yesterday" is included for the off-hour
+      case where today's prefix is empty).
+
+    PrecipRate files are intentionally chosen — they're small (~50-200 KB
+    compressed) so the per-session fetch is fast and doesn't dominate CI time.
+    """
+    try:
+        # Importing cfgrib transitively imports gribapi, which raises a plain
+        # ``RuntimeError("Cannot find the ecCodes library")`` (not ImportError)
+        # when ``libeccodes`` isn't installed system-wide. Catching all three
+        # covers every contributor-laptop failure mode we've seen.
+        import cfgrib  # noqa: F401 — sentinel for "is eccodes available?"
+    except (ImportError, OSError, RuntimeError) as exc:
+        pytest.skip(f"cfgrib/eccodes not available: {exc}")
+
+    try:
+        from datetime import UTC, datetime, timedelta
+
+        from aeroza.ingest._aws import open_data_s3_client
+        from aeroza.ingest.mrms import MrmsFile, list_mrms_files
+        from aeroza.ingest.mrms_decode import download_grib2_payload
+
+        s3 = open_data_s3_client()
+        now = datetime.now(UTC)
+        files: tuple[MrmsFile, ...] = ()
+        for offset in (0, 1):  # today, then yesterday
+            files = await list_mrms_files(
+                product="PrecipRate",
+                level="00.00",
+                day=now - timedelta(days=offset),
+                s3_client=s3,
+            )
+            if files:
+                break
+        if not files:
+            pytest.skip("No PrecipRate files in noaa-mrms-pds for today or yesterday")
+
+        payload = download_grib2_payload(s3, key=files[-1].key)
+    except Exception as exc:
+        pytest.skip(f"could not fetch MRMS GRIB fixture: {exc}")
+
+    yield payload
+
+
 @pytest_asyncio.fixture
 async def api_client(
     integration_db: Database,

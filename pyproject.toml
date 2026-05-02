@@ -133,6 +133,7 @@ addopts = "-ra --strict-markers --strict-config"
 markers = [
     "unit: pure unit tests with no external dependencies",
     "integration: tests requiring docker-compose services",
+    "grib: tests requiring eccodes / cfgrib (skipped when not available)",
     "slow: tests that take more than a few seconds",
 ]
 
