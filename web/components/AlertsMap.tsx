@@ -80,17 +80,50 @@ const STYLE: maplibregl.StyleSpecification = {
 
 interface AlertsMapProps {
   initialBounds?: [number, number, number, number]; // [west, south, east, north]
+  /**
+   * Filter the rendered alerts to those active at this moment in time. Uses
+   * each feature's `effective`/`onset` (start) and `expires`/`ends` (end) to
+   * decide. When omitted, every fetched alert is shown.
+   */
+  displayedAt?: Date | null;
   onLoaded?: (collection: AlertFeatureCollection) => void;
 }
 
 const DEFAULT_BOUNDS: [number, number, number, number] = [-125, 24, -66, 50];
 
-export function AlertsMap({ initialBounds, onLoaded }: AlertsMapProps) {
+/**
+ * Was the alert active at `asOf`?
+ *
+ * Start = `onset` || `effective` (earliest known begin time).
+ * End   = `ends` || `expires` (latest known finish time).
+ *
+ * Missing-start means "always started before now"; missing-end means
+ * "open-ended". Both falsy → the alert is treated as currently in force at
+ * any time, which matches /v1/alerts's "currently active" filter.
+ */
+function wasActiveAt(feature: AlertFeature, asOf: Date): boolean {
+  const t = asOf.getTime();
+  const p = feature.properties;
+  const startStr = p.onset ?? p.effective;
+  const endStr = p.ends ?? p.expires;
+  const startMs = startStr ? Date.parse(startStr) : Number.NEGATIVE_INFINITY;
+  const endMs = endStr ? Date.parse(endStr) : Number.POSITIVE_INFINITY;
+  return t >= startMs && t <= endMs;
+}
+
+export function AlertsMap({
+  initialBounds,
+  displayedAt,
+  onLoaded,
+}: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [selected, setSelected] = useState<AlertFeature | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // Cache the most recent fetch so re-filtering on `displayedAt` change
+  // doesn't trigger a network round trip.
+  const lastCollectionRef = useRef<AlertFeatureCollection | null>(null);
 
   // Build the map exactly once. Strict mode's mount→cleanup→remount within
   // the same tick wrecks MapLibre's WebGL context, so we defer the actual
@@ -215,17 +248,9 @@ export function AlertsMap({ initialBounds, onLoaded }: AlertsMapProps) {
     const refresh = async () => {
       try {
         const data = await fetchAlerts({ limit: 200 });
-        if (cancelled || !mapRef.current) return;
-        const source = mapRef.current.getSource(SOURCE_ID) as GeoJSONSource | undefined;
-        // Drop features without geometry — MapLibre would warn in the console
-        // and the rest of the layer still renders fine without them. Cast via
-        // unknown because our SDK's `coordinates: unknown` is intentionally
-        // looser than the geojson lib's recursive number-array types.
-        const filtered = {
-          type: "FeatureCollection" as const,
-          features: data.features.filter((f) => f.geometry !== null),
-        } as unknown as FeatureCollection<Geometry, GeoJsonProperties>;
-        source?.setData(filtered);
+        if (cancelled) return;
+        lastCollectionRef.current = data;
+        applyToSource(data, displayedAt ?? null);
         setError(null);
         onLoaded?.(data);
       } catch (err) {
@@ -241,7 +266,41 @@ export function AlertsMap({ initialBounds, onLoaded }: AlertsMapProps) {
       cancelled = true;
       clearInterval(interval);
     };
+    // `displayedAt` is intentionally omitted — the dedicated effect below
+    // re-filters from cache without a network round trip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, onLoaded]);
+
+  // Re-apply the filter whenever the scrubbed time changes, using the cached
+  // last collection. No re-fetch needed.
+  useEffect(() => {
+    if (!ready) return;
+    const cached = lastCollectionRef.current;
+    if (!cached) return;
+    applyToSource(cached, displayedAt ?? null);
+  }, [ready, displayedAt]);
+
+  function applyToSource(
+    collection: AlertFeatureCollection,
+    asOf: Date | null,
+  ): void {
+    if (!mapRef.current) return;
+    const source = mapRef.current.getSource(SOURCE_ID) as GeoJSONSource | undefined;
+    if (!source) return;
+    const features = collection.features.filter((f) => {
+      if (f.geometry === null) return false;
+      if (!asOf) return true;
+      return wasActiveAt(f, asOf);
+    });
+    // Cast via unknown because the SDK's `coordinates: unknown` is
+    // intentionally looser than the geojson lib's recursive number-array
+    // types — MapLibre accepts the shape at runtime regardless.
+    const filtered = {
+      type: "FeatureCollection" as const,
+      features,
+    } as unknown as FeatureCollection<Geometry, GeoJsonProperties>;
+    source.setData(filtered);
+  }
 
   return (
     <div className="relative h-full w-full">
