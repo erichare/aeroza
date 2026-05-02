@@ -10,6 +10,7 @@ import pytest
 from aeroza.tiles.web_mercator import (
     MAX_LATITUDE,
     TILE_SIZE,
+    latlng_to_bilinear_indices,
     latlng_to_pixel_indices,
     pixel_lonlat_grid,
     tile_bounds,
@@ -128,3 +129,58 @@ def test_inverse_mercator_against_known_value() -> None:
     b = tile_bounds(2, 1, 1)
     expected_top = math.degrees(math.atan(math.sinh(math.pi / 2)))
     assert b.lat_max == pytest.approx(expected_top, abs=1e-6)
+
+
+# --------------------------------------------------------------------------- #
+# Bilinear sampling — the path the smooth-radar render goes through at z>=4.  #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.unit
+def test_bilinear_at_grid_corner_matches_corner_value() -> None:
+    """When (lat, lng) lands exactly on a grid corner, the four-corner blend
+    collapses to that single cell value — w_row = w_col = 0."""
+    grid_lats = np.array([0.0, 1.0, 2.0, 3.0])
+    grid_lngs = np.array([0.0, 1.0, 2.0, 3.0])
+    lats = np.array([[1.0, 2.0]])
+    lngs = np.array([[1.0, 2.0]])
+    row_lo, _row_hi, col_lo, _col_hi, w_row, w_col, in_bounds = latlng_to_bilinear_indices(
+        lats=lats, lngs=lngs, grid_lats=grid_lats, grid_lngs=grid_lngs
+    )
+    np.testing.assert_array_equal(w_row, [[0.0, 0.0]])
+    np.testing.assert_array_equal(w_col, [[0.0, 0.0]])
+    assert in_bounds.all()
+    assert row_lo.tolist() == [[1, 2]]
+    assert col_lo.tolist() == [[1, 2]]
+
+
+@pytest.mark.unit
+def test_bilinear_midpoint_weights_are_half() -> None:
+    """Halfway between two cell centres gives a 50/50 blend — the standard
+    bilinear contract."""
+    grid_lats = np.array([0.0, 1.0])
+    grid_lngs = np.array([0.0, 1.0])
+    lats = np.array([[0.5]])
+    lngs = np.array([[0.5]])
+    _row_lo, _row_hi, _col_lo, _col_hi, w_row, w_col, in_bounds = latlng_to_bilinear_indices(
+        lats=lats, lngs=lngs, grid_lats=grid_lats, grid_lngs=grid_lngs
+    )
+    assert in_bounds.all()
+    np.testing.assert_array_almost_equal(w_row, [[0.5]])
+    np.testing.assert_array_almost_equal(w_col, [[0.5]])
+
+
+@pytest.mark.unit
+def test_bilinear_in_bounds_excludes_pixels_past_last_full_cell() -> None:
+    """The 2x2 stencil must fit fully inside the grid. Pixels past the
+    last interior corner are out of bounds — even though nearest-neighbor
+    would happily snap them to the edge."""
+    grid_lats = np.array([0.0, 1.0, 2.0])
+    grid_lngs = np.array([0.0, 1.0, 2.0])
+    # 1.5 is in-bounds (lo=1, hi=2 fits). 2.5 is out (hi=3 falls off).
+    lats = np.array([[1.5, 2.5]])
+    lngs = np.array([[1.5, 2.5]])
+    _row_lo, _row_hi, _col_lo, _col_hi, _w_row, _w_col, in_bounds = latlng_to_bilinear_indices(
+        lats=lats, lngs=lngs, grid_lats=grid_lats, grid_lngs=grid_lngs
+    )
+    assert in_bounds.tolist() == [[True, False]]

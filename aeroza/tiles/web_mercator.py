@@ -143,10 +143,72 @@ def latlng_to_pixel_indices(
     return row, col, in_bounds
 
 
+def latlng_to_bilinear_indices(
+    *,
+    lats: np.ndarray,
+    lngs: np.ndarray,
+    grid_lats: np.ndarray,
+    grid_lngs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Bilinear lookup: each pixel resolves to the four enclosing grid
+    corners plus row/col interpolation weights.
+
+    Returns ``(row_lo, row_hi, col_lo, col_hi, w_row, w_col, in_bounds)``.
+    Use as::
+
+        v00 = values[row_lo, col_lo]
+        v01 = values[row_lo, col_hi]
+        v10 = values[row_hi, col_lo]
+        v11 = values[row_hi, col_hi]
+        out = (
+            v00 * (1 - w_row) * (1 - w_col)
+            + v01 * (1 - w_row) * w_col
+            + v10 * w_row * (1 - w_col)
+            + v11 * w_row * w_col
+        )
+
+    NaN propagation is the caller's job: any of the four corners being
+    NaN poisons the result. That's correct — a pixel sitting on the edge
+    of a missing region shouldn't paint a confident colour.
+
+    The ``in_bounds`` mask is True only for pixels whose nearest enclosing
+    cell is fully inside the grid. Pixels outside or on the wrong side of
+    the boundary get clipped indices but should be treated as transparent.
+    """
+    lat_step = float(grid_lats[1] - grid_lats[0])
+    lng_step = float(grid_lngs[1] - grid_lngs[0])
+    lat0 = float(grid_lats[0])
+    lng0 = float(grid_lngs[0])
+    h = grid_lats.shape[0]
+    w = grid_lngs.shape[0]
+
+    fr = (lats - lat0) / lat_step
+    fc = (lngs - lng0) / lng_step
+
+    row_lo = np.floor(fr).astype(np.int64)
+    col_lo = np.floor(fc).astype(np.int64)
+    w_row = (fr - row_lo).astype(np.float64)
+    w_col = (fc - col_lo).astype(np.float64)
+    row_hi = row_lo + 1
+    col_hi = col_lo + 1
+
+    # In-bounds requires the FULL 2x2 stencil to live inside the grid.
+    in_bounds = (row_lo >= 0) & (row_hi < h) & (col_lo >= 0) & (col_hi < w)
+
+    # Clamp so the gather never hits a negative/oversized index. The
+    # mask gates the contribution.
+    row_lo = np.clip(row_lo, 0, max(h - 1, 0))
+    row_hi = np.clip(row_hi, 0, max(h - 1, 0))
+    col_lo = np.clip(col_lo, 0, max(w - 1, 0))
+    col_hi = np.clip(col_hi, 0, max(w - 1, 0))
+    return row_lo, row_hi, col_lo, col_hi, w_row, w_col, in_bounds
+
+
 __all__ = [
     "MAX_LATITUDE",
     "TILE_SIZE",
     "TileBounds",
+    "latlng_to_bilinear_indices",
     "latlng_to_pixel_indices",
     "pixel_lonlat_grid",
     "tile_bounds",
