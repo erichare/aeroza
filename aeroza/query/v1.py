@@ -18,6 +18,10 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   the latest matching grid (or one ``at_time`` in the past). The first
   read-side primitive over the materialised grids — turns the catalog
   from "what is available" into "what is the value here, right now".
+- ``GET /v1/mrms/grids/polygon`` — reduce one grid over the cells inside
+  a ``polygon`` (``max`` / ``mean`` / ``min`` / ``count_ge``). Building
+  block for "is anything intense enough inside this region right now?"
+  alerting / geofencing.
 - ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
 - ``GET /v1/stats`` — compact health-style snapshot of how much data the
   system currently knows about (alerts active/total, MRMS files,
@@ -25,7 +29,8 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
-matcher. Same for ``/mrms/grids/sample`` vs ``/mrms/grids/{file_key:path}``.
+matcher. Same for ``/mrms/grids/sample`` and ``/mrms/grids/polygon`` vs
+``/mrms/grids/{file_key:path}``.
 """
 
 from __future__ import annotations
@@ -77,13 +82,17 @@ from aeroza.query.mrms_grids import (
     mrms_grid_view_to_item,
 )
 from aeroza.query.mrms_sample import (
+    ALL_REDUCERS,
     DEFAULT_TOLERANCE_DEG,
     MAX_TOLERANCE_DEG,
+    MrmsGridPolygonResponse,
     MrmsGridSampleResponse,
     OutOfDomainError,
+    PolygonReducer,
     sample_grid_at_point,
+    sample_grid_in_polygon,
 )
-from aeroza.query.parsers import parse_bbox, parse_point
+from aeroza.query.parsers import parse_bbox, parse_point, parse_polygon
 from aeroza.query.schemas import (
     AlertDetailFeature,
     AlertFeatureCollection,
@@ -465,6 +474,138 @@ async def sample_mrms_grid_route(
         matched_latitude=sample.latitude,
         matched_longitude=sample.longitude,
         tolerance_deg=tolerance_deg,
+    )
+
+
+@router.get(
+    "/mrms/grids/polygon",
+    response_model=MrmsGridPolygonResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    tags=["mrms"],
+    summary="Reduce one MRMS grid over a polygon (max / mean / min / count_ge)",
+    description=(
+        "Reduces ``variable`` over the cells of a materialised MRMS grid "
+        "whose centres fall inside ``polygon``. Polygon vertices are flat "
+        "comma-separated ``lng,lat,lng,lat,...`` (GeoJSON / OGC order), "
+        "minimum three vertices, implicitly closed. By default samples the "
+        "*latest* grid for the given ``product``/``level``; pass ``at_time`` "
+        "(ISO-8601 UTC) to reduce the most-recent grid valid at-or-before "
+        "that moment.\n\n"
+        "Reducers: ``max``, ``mean``, ``min``, ``count_ge`` (number of "
+        "cells with value >= ``threshold``). ``count_ge`` requires "
+        "``threshold``; the others ignore it."
+    ),
+    responses={
+        404: {
+            "description": (
+                "No grid satisfies the request, or the polygon does not "
+                "overlap the grid (no cell centres inside it)."
+            )
+        },
+    },
+)
+async def reduce_mrms_grid_over_polygon_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    polygon: Annotated[
+        str,
+        Query(
+            description=(
+                "Polygon vertices as ``lng,lat,lng,lat,...`` (GeoJSON / OGC "
+                "order). Minimum 3 vertices; the ring is implicitly closed."
+            ),
+            examples=["-95.7,29.5,-95.0,29.5,-95.0,30.0,-95.7,30.0"],
+        ),
+    ],
+    reducer: Annotated[
+        PolygonReducer,
+        Query(description=f"Reducer to apply. One of {list(ALL_REDUCERS)}."),
+    ] = "max",
+    threshold: Annotated[
+        float | None,
+        Query(
+            description=(
+                "Required when ``reducer == 'count_ge'``: counts cells with value >= ``threshold``."
+            ),
+        ),
+    ] = None,
+    product: Annotated[
+        str,
+        Query(description="MRMS product (e.g. 'MergedReflectivityComposite')."),
+    ] = "MergedReflectivityComposite",
+    level: Annotated[
+        str,
+        Query(description="MRMS product level (e.g. '00.50')."),
+    ] = "00.50",
+    at_time: Annotated[
+        datetime | None,
+        Query(
+            description=(
+                "Reduce the most recent grid with valid_at <= this moment. "
+                "Defaults to the overall latest grid."
+            ),
+        ),
+    ] = None,
+) -> MrmsGridPolygonResponse:
+    vertices = parse_polygon(polygon)
+    # ``parse_polygon`` returns None only when ``raw is None``; FastAPI requires
+    # the ``polygon`` query param so this branch is unreachable, but the cast
+    # below keeps mypy honest about the non-None contract.
+    if vertices is None:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="polygon query param is required",
+        )
+    if reducer == "count_ge" and threshold is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reducer 'count_ge' requires a numeric 'threshold' query param",
+        )
+
+    grid = await find_latest_mrms_grid(
+        session,
+        product=product,
+        level=level,
+        at_or_before=at_time,
+    )
+    if grid is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"no materialised grid for product={product!r} level={level!r}"
+                + (f" at_or_before={at_time.isoformat()}" if at_time else "")
+            ),
+        )
+
+    try:
+        sample = await sample_grid_in_polygon(
+            zarr_uri=grid.zarr_uri,
+            variable=grid.variable,
+            polygon_lng_lat=vertices,
+            reducer=reducer,
+            threshold=threshold,
+        )
+    except OutOfDomainError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    return MrmsGridPolygonResponse(
+        file_key=grid.file_key,
+        product=grid.product,
+        level=grid.level,
+        valid_at=grid.valid_at,
+        variable=sample.variable,
+        reducer=sample.reducer,
+        threshold=sample.threshold,
+        value=sample.value,
+        cell_count=sample.cell_count,
+        vertex_count=len(vertices),
+        bbox_min_latitude=sample.bbox_min_latitude,
+        bbox_min_longitude=sample.bbox_min_longitude,
+        bbox_max_latitude=sample.bbox_max_latitude,
+        bbox_max_longitude=sample.bbox_max_longitude,
     )
 
 

@@ -134,7 +134,25 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { Accept: "application/json", ...init?.headers },
   });
   if (!res.ok) {
-    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${path}`);
+    // FastAPI bodies are `{"detail": "..."}`; surfacing it lets panels
+    // show a real error message ("no cell within 0.05° of …") instead
+    // of a bare status line.
+    let detail: string | null = null;
+    try {
+      const body: unknown = await res.json();
+      if (
+        body &&
+        typeof body === "object" &&
+        "detail" in body &&
+        typeof (body as { detail: unknown }).detail === "string"
+      ) {
+        detail = (body as { detail: string }).detail;
+      }
+    } catch {
+      // Non-JSON body — fall back to status line.
+    }
+    const message = detail ?? `${res.status} ${res.statusText} — ${path}`;
+    throw new ApiError(res.status, message);
   }
   return (await res.json()) as T;
 }
@@ -192,6 +210,46 @@ export async function fetchMrmsGrids(q: MrmsQuery = {}): Promise<MrmsGridList> {
   if (q.limit) params.set("limit", String(q.limit));
   const qs = params.toString();
   return getJson<MrmsGridList>(`/v1/mrms/grids${qs ? `?${qs}` : ""}`);
+}
+
+// ---------------------------------------------------------------------------
+// MRMS sample (point query)
+// ---------------------------------------------------------------------------
+
+export interface MrmsGridSample {
+  type: "MrmsGridSample";
+  fileKey: string;
+  product: string;
+  level: string;
+  validAt: string;
+  variable: string;
+  value: number;
+  requestedLatitude: number;
+  requestedLongitude: number;
+  matchedLatitude: number;
+  matchedLongitude: number;
+  toleranceDeg: number;
+}
+
+export interface MrmsSampleQuery {
+  lat: number;
+  lng: number;
+  product?: string;
+  level?: string;
+  atTime?: string;
+  toleranceDeg?: number;
+}
+
+export async function fetchMrmsSample(q: MrmsSampleQuery): Promise<MrmsGridSample> {
+  const params = new URLSearchParams({
+    lat: String(q.lat),
+    lng: String(q.lng),
+  });
+  if (q.product) params.set("product", q.product);
+  if (q.level) params.set("level", q.level);
+  if (q.atTime) params.set("at_time", q.atTime);
+  if (q.toleranceDeg !== undefined) params.set("tolerance_deg", String(q.toleranceDeg));
+  return getJson<MrmsGridSample>(`/v1/mrms/grids/sample?${params.toString()}`);
 }
 
 export { ApiError };

@@ -2,6 +2,7 @@ import { AlertsStreamPanel } from "@/components/AlertsStreamPanel";
 import { HealthPanel } from "@/components/HealthPanel";
 import { MrmsFilesPanel } from "@/components/MrmsFilesPanel";
 import { MrmsGridsPanel } from "@/components/MrmsGridsPanel";
+import { SamplePanel } from "@/components/SamplePanel";
 
 export default function ConsolePage() {
   return (
@@ -28,6 +29,10 @@ export default function ConsolePage() {
           <Link href="/v1/alerts" label="GET /v1/alerts" />
           <Link href="/v1/mrms/files" label="GET /v1/mrms/files" />
           <Link href="/v1/mrms/grids" label="GET /v1/mrms/grids" />
+          <Link
+            href="/v1/mrms/grids/sample?lat=29.76&lng=-95.37"
+            label="GET /v1/mrms/grids/sample"
+          />
           <Link href="/v1/stats" label="GET /v1/stats" />
         </nav>
       </header>
@@ -42,6 +47,9 @@ export default function ConsolePage() {
         </div>
         <div className="lg:col-span-3">
           <MrmsGridsPanel />
+        </div>
+        <div className="lg:col-span-3">
+          <SamplePanel />
         </div>
       </div>
 
