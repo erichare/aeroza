@@ -15,6 +15,7 @@ from aeroza.config import Settings, get_settings
 from aeroza.query.v1 import router as v1_router
 from aeroza.shared.db import create_engine_and_session
 from aeroza.stream.nats import NatsAlertSubscriber, nats_connection
+from aeroza.webhooks.routes import router as webhooks_router
 
 log = structlog.get_logger(__name__)
 
@@ -85,7 +86,9 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=list(DEV_CONSOLE_ORIGINS),
             allow_credentials=False,
-            allow_methods=["GET", "OPTIONS"],
+            # The webhook CRUD surface needs the write verbs the dev console
+            # uses for its operator UI (PR #5+). Keep CORS dev-only.
+            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["*"],
         )
 
@@ -102,6 +105,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(v1_router)
+    app.include_router(webhooks_router)
     return app
 
 
