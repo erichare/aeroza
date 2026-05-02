@@ -130,7 +130,8 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
         path: "/v1/calibration",
         summary: "Aggregate verification metrics, grouped by algorithm × horizon.",
         notes:
-          "Sample-weighted MAE / bias / RMSE over the window. Default " +
+          "Sample-weighted MAE / bias / RMSE plus categorical POD / FAR / CSI " +
+          "(at the verifier's threshold, default 35 dBZ) over the window. Default " +
           "windowHours=24; supports algorithm / product / level filters.",
       },
       {
@@ -139,8 +140,8 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
         summary:
           "Time-bucketed companion to /v1/calibration — sparkline per (algorithm, horizon).",
         notes:
-          "Same metrics, with one extra group-by on bucketStart. " +
-          "bucketSeconds in [300, 86400] (default 3600 / 1 hour).",
+          "Same metrics (continuous + categorical), with one extra group-by on " +
+          "bucketStart. bucketSeconds in [300, 86400] (default 3600 / 1 hour).",
       },
     ],
   },

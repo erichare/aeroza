@@ -25,6 +25,11 @@ _MUTABLE_COLUMNS: Final[tuple[str, ...]] = (
     "bias",
     "rmse",
     "sample_count",
+    "threshold_dbz",
+    "hits",
+    "misses",
+    "false_alarms",
+    "correct_negatives",
 )
 
 
@@ -59,6 +64,11 @@ async def upsert_verification(
         "bias": metrics.bias,
         "rmse": metrics.rmse,
         "sample_count": metrics.sample_count,
+        "threshold_dbz": metrics.threshold_dbz,
+        "hits": metrics.hits,
+        "misses": metrics.misses,
+        "false_alarms": metrics.false_alarms,
+        "correct_negatives": metrics.correct_negatives,
     }
     insert_stmt = pg_insert(VerificationRow).values(row)
     update_set: dict[str, Any] = {col: insert_stmt.excluded[col] for col in _MUTABLE_COLUMNS}
@@ -90,6 +100,11 @@ class CalibrationBucket:
     requested time window. ``mae_mean`` and friends are sample-weighted
     averages — a verification with 1M cells contributing counts more
     than one with 100 cells, which is what an honest dashboard wants.
+
+    Categorical fields (``hits_total`` etc.) are simple sums across the
+    window so the route layer can compute POD/FAR/CSI as ratios on
+    read. Sums survive aggregation; ratios don't (averaging ratios is
+    not the same as the ratio of averages).
     """
 
     algorithm: str
@@ -99,6 +114,15 @@ class CalibrationBucket:
     mae_mean: float
     bias_mean: float
     rmse_mean: float
+    # Categorical aggregate. ``threshold_dbz`` is the threshold used
+    # if every contributing row agrees (None when rows used different
+    # thresholds or the column was NULL). The summed counts are 0 when
+    # no row in the window had categorical metrics.
+    threshold_dbz: float | None
+    hits_total: int
+    misses_total: int
+    false_alarms_total: int
+    correct_negatives_total: int
 
 
 async def aggregate_calibration(
@@ -130,6 +154,13 @@ async def aggregate_calibration(
         # when ``sample_count`` sums to zero (no data contributed).
         return case((total_samples > 0, numer / total_samples), else_=0.0)
 
+    # Distinct count of thresholds used across rows in this bucket. If
+    # every row used the same threshold (count == 1) we surface it; if
+    # rows used different thresholds (count > 1) the route returns None
+    # rather than mix incompatible cells silently.
+    distinct_thresholds = func.count(func.distinct(VerificationRow.threshold_dbz))
+    any_threshold = func.max(VerificationRow.threshold_dbz)
+
     stmt = (
         select(
             VerificationRow.algorithm,
@@ -139,6 +170,14 @@ async def aggregate_calibration(
             safe_div(weighted_mae).label("mae_mean"),
             safe_div(weighted_bias).label("bias_mean"),
             safe_div(weighted_rmse).label("rmse_mean"),
+            func.coalesce(func.sum(VerificationRow.hits), 0).label("hits_total"),
+            func.coalesce(func.sum(VerificationRow.misses), 0).label("misses_total"),
+            func.coalesce(func.sum(VerificationRow.false_alarms), 0).label("false_alarms_total"),
+            func.coalesce(func.sum(VerificationRow.correct_negatives), 0).label(
+                "correct_negatives_total"
+            ),
+            any_threshold.label("any_threshold"),
+            distinct_thresholds.label("distinct_thresholds"),
         )
         .where(VerificationRow.verified_at >= since)
         .group_by(
@@ -160,6 +199,11 @@ async def aggregate_calibration(
     result = await session.execute(stmt)
     buckets: list[CalibrationBucket] = []
     for row in result.mappings():
+        threshold = (
+            float(row["any_threshold"])
+            if row["any_threshold"] is not None and int(row["distinct_thresholds"]) == 1
+            else None
+        )
         buckets.append(
             CalibrationBucket(
                 algorithm=row["algorithm"],
@@ -169,6 +213,11 @@ async def aggregate_calibration(
                 mae_mean=float(row["mae_mean"] or 0.0),
                 bias_mean=float(row["bias_mean"] or 0.0),
                 rmse_mean=float(row["rmse_mean"] or 0.0),
+                threshold_dbz=threshold,
+                hits_total=int(row["hits_total"] or 0),
+                misses_total=int(row["misses_total"] or 0),
+                false_alarms_total=int(row["false_alarms_total"] or 0),
+                correct_negatives_total=int(row["correct_negatives_total"] or 0),
             )
         )
     return tuple(buckets)
@@ -202,6 +251,11 @@ class CalibrationSeriesPoint:
     mae_mean: float
     bias_mean: float
     rmse_mean: float
+    threshold_dbz: float | None
+    hits_total: int
+    misses_total: int
+    false_alarms_total: int
+    correct_negatives_total: int
 
 
 async def aggregate_calibration_series(
@@ -245,6 +299,8 @@ async def aggregate_calibration_series(
     def safe_div(numer: Any) -> Any:
         return case((total_samples > 0, numer / total_samples), else_=0.0)
 
+    distinct_thresholds = func.count(func.distinct(VerificationRow.threshold_dbz))
+    any_threshold = func.max(VerificationRow.threshold_dbz)
     stmt = (
         select(
             VerificationRow.algorithm,
@@ -255,6 +311,14 @@ async def aggregate_calibration_series(
             safe_div(weighted_mae).label("mae_mean"),
             safe_div(weighted_bias).label("bias_mean"),
             safe_div(weighted_rmse).label("rmse_mean"),
+            func.coalesce(func.sum(VerificationRow.hits), 0).label("hits_total"),
+            func.coalesce(func.sum(VerificationRow.misses), 0).label("misses_total"),
+            func.coalesce(func.sum(VerificationRow.false_alarms), 0).label("false_alarms_total"),
+            func.coalesce(func.sum(VerificationRow.correct_negatives), 0).label(
+                "correct_negatives_total"
+            ),
+            any_threshold.label("any_threshold"),
+            distinct_thresholds.label("distinct_thresholds"),
         )
         .where(VerificationRow.verified_at >= since)
         .group_by(
@@ -286,6 +350,11 @@ async def aggregate_calibration_series(
             from datetime import UTC
 
             bucket_start = bucket_start.replace(tzinfo=UTC)
+        threshold = (
+            float(row["any_threshold"])
+            if row["any_threshold"] is not None and int(row["distinct_thresholds"]) == 1
+            else None
+        )
         points.append(
             CalibrationSeriesPoint(
                 algorithm=row["algorithm"],
@@ -296,6 +365,11 @@ async def aggregate_calibration_series(
                 mae_mean=float(row["mae_mean"] or 0.0),
                 bias_mean=float(row["bias_mean"] or 0.0),
                 rmse_mean=float(row["rmse_mean"] or 0.0),
+                threshold_dbz=threshold,
+                hits_total=int(row["hits_total"] or 0),
+                misses_total=int(row["misses_total"] or 0),
+                false_alarms_total=int(row["false_alarms_total"] or 0),
+                correct_negatives_total=int(row["correct_negatives_total"] or 0),
             )
         )
     return tuple(points)

@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from aeroza.verify.metrics import csi, far, pod
 from aeroza.verify.store import CalibrationBucket, CalibrationSeriesPoint
 
 
@@ -17,6 +18,13 @@ class CalibrationRow(BaseModel):
     Per (algorithm × forecast horizon) over the requested window.
     Sample-weighted means: a verification with N=1M cells contributes
     N times to ``maeMean`` / ``biasMean`` / ``rmseMean``.
+
+    Categorical fields (``pod``, ``far``, ``csi``) are computed at
+    serialization time from the summed contingency table — averaging
+    POD/FAR/CSI across rows would be wrong (averaging ratios is not
+    the same as the ratio of averages). They're nullable: when no
+    contributing row had categorical metrics or the threshold was
+    mixed, we surface ``null`` rather than a misleading 0.
     """
 
     model_config = ConfigDict(populate_by_name=True, frozen=True)
@@ -28,6 +36,10 @@ class CalibrationRow(BaseModel):
     mae_mean: float = Field(serialization_alias="maeMean")
     bias_mean: float = Field(serialization_alias="biasMean")
     rmse_mean: float = Field(serialization_alias="rmseMean")
+    threshold_dbz: float | None = Field(default=None, serialization_alias="thresholdDbz")
+    pod: float | None = None
+    far: float | None = None
+    csi: float | None = None
 
 
 class CalibrationResponse(BaseModel):
@@ -59,6 +71,10 @@ def calibration_buckets_to_response(
                 mae_mean=b.mae_mean,
                 bias_mean=b.bias_mean,
                 rmse_mean=b.rmse_mean,
+                threshold_dbz=b.threshold_dbz,
+                pod=pod(b.hits_total, b.misses_total),
+                far=far(b.hits_total, b.false_alarms_total),
+                csi=csi(b.hits_total, b.misses_total, b.false_alarms_total),
             )
             for b in buckets
         ],
@@ -76,6 +92,10 @@ class CalibrationSeriesItemPoint(BaseModel):
     mae_mean: float = Field(serialization_alias="maeMean")
     bias_mean: float = Field(serialization_alias="biasMean")
     rmse_mean: float = Field(serialization_alias="rmseMean")
+    threshold_dbz: float | None = Field(default=None, serialization_alias="thresholdDbz")
+    pod: float | None = None
+    far: float | None = None
+    csi: float | None = None
 
 
 class CalibrationSeriesItem(BaseModel):
@@ -142,6 +162,10 @@ def calibration_points_to_series(
                 mae_mean=p.mae_mean,
                 bias_mean=p.bias_mean,
                 rmse_mean=p.rmse_mean,
+                threshold_dbz=p.threshold_dbz,
+                pod=pod(p.hits_total, p.misses_total),
+                far=far(p.hits_total, p.false_alarms_total),
+                csi=csi(p.hits_total, p.misses_total, p.false_alarms_total),
             )
         )
     if current_key is not None:

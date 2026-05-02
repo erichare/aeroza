@@ -11,7 +11,11 @@ import numpy as np
 import pytest
 
 from aeroza.verify.metrics import (
+    DEFAULT_THRESHOLD_DBZ,
     DeterministicMetrics,
+    csi,
+    far,
+    pod,
     score_deterministic_grids,
 )
 
@@ -85,3 +89,83 @@ def test_metrics_dataclass_is_frozen() -> None:
     metrics = DeterministicMetrics(mae=1.0, bias=0.0, rmse=1.0, sample_count=1)
     with pytest.raises(AttributeError):
         metrics.mae = 2.0  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# Categorical (POD / FAR / CSI) — default threshold 35 dBZ                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_threshold_skips_when_set_to_none() -> None:
+    obs = np.zeros((2, 2), dtype=np.float32)
+    metrics = score_deterministic_grids(obs, obs, threshold_dbz=None)
+    assert metrics.threshold_dbz is None
+    assert metrics.hits == metrics.misses == metrics.false_alarms == 0
+    assert metrics.correct_negatives == 0
+
+
+def test_perfect_threshold_forecast_is_all_hits_and_correct_negatives() -> None:
+    # Two cells crossing the 35 dBZ threshold, two cells clearly below.
+    obs = np.array([40.0, 50.0, 10.0, 0.0], dtype=np.float32)
+    forecast = obs.copy()
+    metrics = score_deterministic_grids(forecast, obs)
+    assert metrics.threshold_dbz == DEFAULT_THRESHOLD_DBZ
+    assert metrics.hits == 2
+    assert metrics.correct_negatives == 2
+    assert metrics.misses == metrics.false_alarms == 0
+    assert pod(metrics.hits, metrics.misses) == 1.0
+    assert far(metrics.hits, metrics.false_alarms) == 0.0
+    assert csi(metrics.hits, metrics.misses, metrics.false_alarms) == 1.0
+
+
+def test_pure_miss_pure_false_alarm() -> None:
+    # Forecast says no event everywhere; observation has one event cell.
+    obs = np.array([40.0, 0.0, 0.0], dtype=np.float32)
+    forecast_all_low = np.zeros_like(obs)
+    metrics_miss = score_deterministic_grids(forecast_all_low, obs)
+    assert metrics_miss.misses == 1
+    assert metrics_miss.hits == 0
+    assert pod(metrics_miss.hits, metrics_miss.misses) == 0.0
+
+    forecast_all_high = np.array([0.0, 50.0, 0.0], dtype=np.float32)
+    metrics_fa = score_deterministic_grids(forecast_all_high, obs)
+    assert metrics_fa.false_alarms == 1
+    assert metrics_fa.hits == 0
+    assert far(metrics_fa.hits, metrics_fa.false_alarms) == 1.0
+
+
+def test_pod_far_csi_return_none_when_denominators_are_zero() -> None:
+    # No observed events and no forecast events → POD, FAR, CSI all None.
+    assert pod(0, 0) is None
+    assert far(0, 0) is None
+    assert csi(0, 0, 0) is None
+
+
+def test_threshold_uses_default_when_unspecified() -> None:
+    obs = np.array([34.9, 35.0, 35.1], dtype=np.float32)
+    forecast = obs.copy()
+    metrics = score_deterministic_grids(forecast, obs)
+    # 35.0 and 35.1 are at-or-above the threshold; 34.9 is below.
+    assert metrics.hits == 2
+    assert metrics.correct_negatives == 1
+
+
+def test_custom_threshold_overrides_default() -> None:
+    obs = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
+    forecast = obs.copy()
+    metrics = score_deterministic_grids(forecast, obs, threshold_dbz=20.0)
+    assert metrics.threshold_dbz == 20.0
+    # ≥20: indices 1, 2, 3 → 3 hits.
+    assert metrics.hits == 3
+    assert metrics.correct_negatives == 1
+
+
+def test_categorical_skips_nan_cells() -> None:
+    obs = np.array([40.0, np.nan, 0.0], dtype=np.float32)
+    forecast = np.array([40.0, 100.0, 0.0], dtype=np.float32)
+    metrics = score_deterministic_grids(forecast, obs)
+    # NaN cell excluded; remaining 2 cells: one hit, one correct-negative.
+    assert metrics.sample_count == 2
+    assert metrics.hits == 1
+    assert metrics.correct_negatives == 1
+    assert metrics.misses == metrics.false_alarms == 0
