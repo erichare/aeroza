@@ -12,44 +12,36 @@ What's next: ensemble forecasting (Brier / CRPS), auth + API keys, and additiona
 
 ## Quickstart (development)
 
-Requires Docker and [uv](https://docs.astral.sh/uv/).
+Requires Docker, Node 20+, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Install Python deps
-uv sync
-
-# Start dev infrastructure (Postgres+PostGIS, Redis, NATS JetStream)
-docker compose up -d
-
-# Apply migrations
-make migrate
-
-# Run the API
-make dev
-
-# In separate terminals, start the long-running workers so the API
-# surface has live data to serve. The `aeroza-*` CLIs are also fine
-# if you'd rather not use make.
-make ingest-alerts        # NWS active alerts → /v1/alerts*
-make ingest-mrms          # MRMS file catalog → /v1/mrms/files
-make materialise-mrms     # MRMS GRIB2 → Zarr → /v1/mrms/grids*
-
-# Run tests
-uv run pytest
+make start
 ```
 
-The API listens on `http://localhost:8000`. Health check: `GET /health`. Interactive Swagger: <http://localhost:8000/docs>.
+That single command runs `make doctor` (preflight check), `make bootstrap` (creates `.env` with a real signing salt, syncs Python deps, starts Postgres / Redis / NATS, applies migrations), then launches the full stack via [honcho](https://github.com/nickstenning/honcho) and [`Procfile.dev`](Procfile.dev): FastAPI on :8000, the Next.js console on :3000, plus the alerts / MRMS / METAR ingest workers and the webhook dispatcher. Ctrl+C tears everything down in one shot.
 
-### Web (landing + map + calibration + dev console + docs)
+- API: <http://localhost:8000> — health at `/health`, Swagger at `/docs`.
+- Console: <http://localhost:3000> — landing, `/map`, `/calibration`, `/console`, `/docs`.
 
-The Next.js app in [`web/`](web/) is the public face. It serves the marketing landing page, an interactive `/map` (MapLibre + alert polygons + MRMS radar tiles + scrubbable timeline), the `/calibration` dashboard (algorithm × horizon MAE matrix + sparkline), a `/console` for live API testing, and a `/docs` hub.
+Run `make stop` to bring down the docker layer when you're done. Re-running `make start` is idempotent.
+
+### By hand
+
+If you'd rather drive the pieces individually:
 
 ```bash
-make web-install   # one-time
-make web-dev       # http://localhost:3000
+make bootstrap            # one-time setup (idempotent)
+make dev                  # FastAPI on :8000 — terminal 1
+make web-dev              # Next console on :3000 — terminal 2
+make ingest-alerts        # NWS active alerts → /v1/alerts* — terminal 3
+make ingest-mrms          # MRMS file catalog → /v1/mrms/files — terminal 4
+make ingest-metar         # METAR observations → /v1/metar — terminal 5
+make materialise-mrms     # MRMS GRIB2 → Zarr → /v1/mrms/grids* (needs `[grib]`)
+make nowcast-persistence  # Persistence-baseline nowcaster
+uv run pytest             # Run unit tests
 ```
 
-Needs `make dev` (FastAPI on :8000) running in another terminal.
+Every entry above is also a top-level `aeroza-*` script; `make help` lists all targets.
 
 ## Architecture
 
