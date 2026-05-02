@@ -273,6 +273,50 @@ export default function ConceptsPage() {
         baseline is honest enough to point a chart at.
       </p>
 
+      <h2>Webhooks &amp; alert rules</h2>
+      <p>
+        Every subject the platform publishes on NATS is also a webhook
+        event. Subscribers register a target URL and an{" "}
+        <code>events</code> array; the dispatcher translates each NATS
+        message into an HTTP POST with an HMAC-SHA256 signature in the{" "}
+        <code>Aeroza-Signature</code> header (Stripe-style{" "}
+        <code>v1=&lt;hex&gt;</code>) and the publish time in{" "}
+        <code>Aeroza-Timestamp</code>. Two subjects are wired so far:
+      </p>
+      <ul>
+        <li>
+          <code>aeroza.alerts.nws.new</code> — every newly-observed NWS
+          alert (the same stream behind <code>/v1/alerts/stream</code>).
+        </li>
+        <li>
+          <code>aeroza.nowcast.grids.new</code> — every persisted nowcast
+          (one event per algorithm × horizon × valid_at).
+        </li>
+      </ul>
+      <p>
+        Subscriptions can be filtered by an <strong>alert rule</strong> —
+        a tiny DSL with two predicate kinds: <code>point</code>{" "}
+        (alert polygon intersects a circle of radius{" "}
+        <code>radiusMeters</code> around <code>(lat, lng)</code>) and{" "}
+        <code>polygon</code> (alert intersects a caller-supplied
+        polygon). Rules can also gate on a minimum severity and an
+        optional event-name allowlist. One rule can back many
+        subscriptions, so a "Texas storms ≥ Severe" rule is a
+        first-class object you can attach to as many webhook targets as
+        you need.
+      </p>
+      <p>
+        The dispatcher's retry queue records every attempt in{" "}
+        <code>webhook_deliveries</code>: response status, latency,
+        response-body excerpt for failures. A circuit breaker flips a
+        subscription to <code>disabled</code> after repeated
+        non-success — a visible, human-readable signal so a 4xx storm
+        from a flaky receiver doesn't burn the queue. CRUD all of the
+        above through{" "}
+        <Link href="/docs/api">/v1/webhooks</Link> and{" "}
+        <Link href="/docs/api">/v1/alert-rules</Link>.
+      </p>
+
       <h2>Stats snapshot</h2>
       <p>
         <code>GET /v1/stats</code> is a compact "what does the system know

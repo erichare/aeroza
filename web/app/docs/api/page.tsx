@@ -11,8 +11,10 @@ export const metadata: Metadata = {
 
 const API_BASE = process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000";
 
+type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
 interface Route {
-  method: "GET";
+  method: HttpMethod;
   path: string;
   summary: string;
   notes?: string;
@@ -139,6 +141,87 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
         notes:
           "Same metrics, with one extra group-by on bucketStart. " +
           "bucketSeconds in [300, 86400] (default 3600 / 1 hour).",
+      },
+    ],
+  },
+  {
+    section: "Webhooks",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/webhooks",
+        summary: "List webhook subscriptions.",
+        notes:
+          "Filter by status (active / paused / disabled). The list omits " +
+          "the secret; the detail route returns its hash.",
+      },
+      {
+        method: "POST",
+        path: "/v1/webhooks",
+        summary: "Create a subscription.",
+        notes:
+          "Body: target URL, events array (e.g. aeroza.alerts.nws.new, " +
+          "aeroza.nowcast.grids.new), an optional alertRuleId, optional " +
+          "secret (auto-generated if omitted).",
+      },
+      {
+        method: "GET",
+        path: "/v1/webhooks/{sub_id}",
+        summary: "One subscription's full detail.",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/webhooks/{sub_id}",
+        summary: "Update events / target / status / alertRuleId.",
+        notes:
+          "Status transitions: active ⇄ paused; the dispatcher's circuit " +
+          "breaker can flip a sub to disabled after repeated 4xx/5xx.",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/webhooks/{sub_id}",
+        summary: "Soft-delete a subscription.",
+        notes:
+          "Sets status to deleted; rows are kept so the delivery log " +
+          "remains queryable.",
+      },
+    ],
+  },
+  {
+    section: "Alert rules (webhook predicate DSL)",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/alert-rules",
+        summary: "List alert rules.",
+        notes:
+          "Rules are reusable across webhook subscriptions — one rule, many " +
+          "subs. The wire shape is a discriminated union over rule.kind " +
+          "(currently 'point' or 'polygon').",
+      },
+      {
+        method: "POST",
+        path: "/v1/alert-rules",
+        summary: "Create a rule.",
+        notes:
+          "Body: kind, predicate config (point: lat/lng/radiusMeters; " +
+          "polygon: GeoJSON-style coordinates), severity floor, optional " +
+          "event-name allowlist.",
+      },
+      {
+        method: "GET",
+        path: "/v1/alert-rules/{rule_id}",
+        summary: "One rule's full detail.",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/alert-rules/{rule_id}",
+        summary: "Update predicate / severity floor / status.",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/alert-rules/{rule_id}",
+        summary: "Soft-delete a rule.",
       },
     ],
   },
