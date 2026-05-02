@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 
+import { AlertRulesPanel } from "@/components/AlertRulesPanel";
 import { AlertsStreamPanel } from "@/components/AlertsStreamPanel";
 import { HealthPanel } from "@/components/HealthPanel";
 import { MrmsFilesPanel } from "@/components/MrmsFilesPanel";
 import { MrmsGridsPanel } from "@/components/MrmsGridsPanel";
 import { SamplePanel } from "@/components/SamplePanel";
+import { WebhooksPanel } from "@/components/WebhooksPanel";
 
 export const metadata: Metadata = {
   title: "Dev Console",
@@ -37,6 +39,8 @@ export default function ConsolePage() {
             label="GET /v1/mrms/grids/sample"
           />
           <ApiLink href="/v1/stats" label="GET /v1/stats" />
+          <ApiLink href="/v1/webhooks" label="GET /v1/webhooks" />
+          <ApiLink href="/v1/alert-rules" label="GET /v1/alert-rules" />
         </nav>
       </header>
 
@@ -53,6 +57,12 @@ export default function ConsolePage() {
         </div>
         <div className="lg:col-span-3">
           <SamplePanel />
+        </div>
+        <div className="lg:col-span-2">
+          <WebhooksPanel />
+        </div>
+        <div className="lg:col-span-1">
+          <AlertRulesPanel />
         </div>
       </div>
 
