@@ -1,75 +1,191 @@
-import { AlertsStreamPanel } from "@/components/AlertsStreamPanel";
-import { HealthPanel } from "@/components/HealthPanel";
-import { MrmsFilesPanel } from "@/components/MrmsFilesPanel";
-import { MrmsGridsPanel } from "@/components/MrmsGridsPanel";
-import { SamplePanel } from "@/components/SamplePanel";
+import Link from "next/link";
 
-export default function ConsolePage() {
+const HERO_TAGLINE = "Weather, but queryable.";
+const HERO_SUBHEAD =
+  "Aeroza turns weather into a queryable, streaming API. Real-time radar, " +
+  "predictive nowcasting with calibrated confidence, and geospatial queries " +
+  "— for applications that need to understand and react to weather in real time.";
+
+interface Feature {
+  title: string;
+  body: string;
+  endpoint: string | null;
+  status: "ready" | "soon";
+}
+
+const FEATURES: ReadonlyArray<Feature> = [
+  {
+    title: "Real-time radar & alerts",
+    body:
+      "MRMS reflectivity grids materialised in seconds, NWS alerts streamed " +
+      "as Server-Sent Events. The data layer is live, not batch.",
+    endpoint: "GET /v1/alerts/stream",
+    status: "ready",
+  },
+  {
+    title: "Geospatial queries",
+    body:
+      "Sample a point, reduce a polygon (max / mean / min / count above a " +
+      "threshold). Lat-lng in, value out — no GIS toolchain required.",
+    endpoint: "GET /v1/mrms/grids/polygon",
+    status: "ready",
+  },
+  {
+    title: "Probabilistic nowcasting",
+    body:
+      "Predicted reflectivity 10 / 30 / 60 minutes out, with calibrated " +
+      "confidence and a public reliability diagram. Built on pySTEPS today, " +
+      "NowcastNet next.",
+    endpoint: null,
+    status: "soon",
+  },
+];
+
+const CALLOUTS: ReadonlyArray<{ label: string; href: string; primary?: boolean }> = [
+  { label: "Open the dev console", href: "/console", primary: true },
+  { label: "Read the docs", href: "/docs" },
+  { label: "OpenAPI schema", href: "/openapi.json" },
+];
+
+export default function LandingPage() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-6 py-8">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2 w-2 rounded-full bg-accent pulse-dot" />
-            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent">
-              Aeroza · dev console
-            </span>
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-text">
-            Live test harness
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">
-            Real-time view of the FastAPI surface — alerts SSE stream, MRMS
-            catalog, and health. Designed for development and demo, not for
-            production traffic.
-          </p>
-        </div>
-        <nav className="flex flex-wrap gap-2 text-xs">
-          <Link href="/docs" label="OpenAPI / Swagger" />
-          <Link href="/v1/alerts" label="GET /v1/alerts" />
-          <Link href="/v1/mrms/files" label="GET /v1/mrms/files" />
-          <Link href="/v1/mrms/grids" label="GET /v1/mrms/grids" />
-          <Link
-            href="/v1/mrms/grids/sample?lat=29.76&lng=-95.37"
-            label="GET /v1/mrms/grids/sample"
-          />
-          <Link href="/v1/stats" label="GET /v1/stats" />
-        </nav>
-      </header>
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <AlertsStreamPanel />
-        </div>
-        <HealthPanel />
-        <div className="lg:col-span-3">
-          <MrmsFilesPanel />
-        </div>
-        <div className="lg:col-span-3">
-          <MrmsGridsPanel />
-        </div>
-        <div className="lg:col-span-3">
-          <SamplePanel />
-        </div>
-      </div>
-
-      <footer className="mt-auto pt-6 text-center text-[11px] text-muted/60">
-        Console v0.1 · {new Date().getFullYear()} · github.com/erichare/aeroza
-      </footer>
+    <main className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-[1400px] flex-col gap-16 px-6 py-16">
+      <Hero />
+      <Features />
+      <BottomCta />
+      <Footer />
     </main>
   );
 }
 
-function Link({ href, label }: { href: string; label: string }) {
-  const apiBase = process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000";
+function Hero() {
   return (
-    <a
-      href={`${apiBase}${href}`}
-      target="_blank"
-      rel="noreferrer"
-      className="rounded-md border border-border/70 px-2 py-1 font-mono text-muted hover:border-accent/60 hover:text-accent"
-    >
+    <section className="flex flex-col items-start gap-6">
+      <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+        Aeroza · v0.1 · in development
+      </span>
+      <h1 className="max-w-3xl text-5xl font-semibold tracking-tight text-text sm:text-6xl">
+        {HERO_TAGLINE}
+      </h1>
+      <p className="max-w-2xl text-base leading-relaxed text-muted sm:text-lg">
+        {HERO_SUBHEAD}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        {CALLOUTS.map((cta) => (
+          <CallToAction key={cta.href} {...cta} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CallToAction({
+  label,
+  href,
+  primary,
+}: {
+  label: string;
+  href: string;
+  primary?: boolean;
+}) {
+  const className = primary
+    ? "rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm font-medium text-accent hover:bg-accent/25"
+    : "rounded-md border border-border/70 px-4 py-2 text-sm text-muted hover:border-accent/60 hover:text-text";
+  if (href.startsWith("/openapi.json")) {
+    const apiBase = process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000";
+    return (
+      <a href={`${apiBase}${href}`} target="_blank" rel="noreferrer" className={className}>
+        {label}
+      </a>
+    );
+  }
+  return (
+    <Link href={href} className={className}>
       {label}
-    </a>
+    </Link>
+  );
+}
+
+function Features() {
+  return (
+    <section className="grid gap-5 lg:grid-cols-3">
+      {FEATURES.map((feature) => (
+        <FeatureCard key={feature.title} feature={feature} />
+      ))}
+    </section>
+  );
+}
+
+function FeatureCard({ feature }: { feature: Feature }) {
+  return (
+    <article className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-surface/40 p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset] backdrop-blur">
+      <header className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-text">{feature.title}</h3>
+        <StatusPill status={feature.status} />
+      </header>
+      <p className="text-sm leading-relaxed text-muted">{feature.body}</p>
+      {feature.endpoint ? (
+        <code className="mt-auto rounded-md border border-border/60 bg-bg/40 px-2 py-1 font-mono text-[11px] text-muted">
+          {feature.endpoint}
+        </code>
+      ) : (
+        <span className="mt-auto font-mono text-[11px] text-muted/70">
+          schema lands with Phase 3 (calibrated nowcasts)
+        </span>
+      )}
+    </article>
+  );
+}
+
+function StatusPill({ status }: { status: "ready" | "soon" }) {
+  if (status === "ready") {
+    return (
+      <span className="rounded-full bg-success/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-success">
+        Live
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full bg-warning/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-warning">
+      Soon
+    </span>
+  );
+}
+
+function BottomCta() {
+  return (
+    <section className="rounded-2xl border border-border/70 bg-surface/40 p-8 backdrop-blur">
+      <h2 className="text-xl font-semibold text-text">Try it against live data</h2>
+      <p className="mt-2 max-w-2xl text-sm text-muted">
+        The dev console runs every public endpoint against a local FastAPI
+        instance backed by NEXRAD CONUS data. Spin it up with{" "}
+        <code className="font-mono text-text">make dev</code> and{" "}
+        <code className="font-mono text-text">npm run dev</code>.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <Link
+          href="/console"
+          className="rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm font-medium text-accent hover:bg-accent/25"
+        >
+          Open the dev console →
+        </Link>
+        <a
+          href="https://github.com/erichare/aeroza#quickstart"
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-border/70 px-4 py-2 text-sm text-muted hover:border-accent/60 hover:text-text"
+        >
+          Run it locally
+        </a>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="mt-auto border-t border-border/60 pt-6 text-center text-[11px] text-muted/60">
+      Aeroza · {new Date().getFullYear()} · github.com/erichare/aeroza
+    </footer>
   );
 }
