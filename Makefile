@@ -1,7 +1,8 @@
 .PHONY: help install dev up down logs test test-unit test-integration test-cov \
-        lint format typecheck check migrate migrate-down migration db-shell clean \
+        lint format format-check typecheck check migrate migrate-down migration db-shell clean \
         web-install web-dev web-build web-typecheck \
-        ingest-alerts ingest-mrms materialise-mrms
+        ingest-alerts ingest-mrms materialise-mrms \
+        nowcast-pysteps nowcast-persistence
 
 UV ?= uv
 
@@ -26,6 +27,12 @@ ingest-mrms: ## Long-running MRMS file-catalog poller (run alongside `make dev`)
 
 materialise-mrms: ## Long-running MRMS Zarr materialiser (run alongside `make dev`)
 	$(UV) run aeroza-materialise-mrms
+
+nowcast-pysteps: ## Long-running nowcaster using pySTEPS (needs --extra nowcast)
+	$(UV) run aeroza-nowcast-mrms --algorithm pysteps
+
+nowcast-persistence: ## Long-running nowcaster using the persistence baseline
+	$(UV) run aeroza-nowcast-mrms --algorithm persistence
 
 up: ## Start dev infrastructure (Postgres, Redis, NATS)
 	docker compose up -d

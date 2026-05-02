@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,11 +41,18 @@ from aeroza.nowcast.engine import (
 )
 from aeroza.nowcast.models import NowcastRow
 from aeroza.nowcast.store import upsert_nowcast
+from aeroza.query.mrms_grids import find_recent_mrms_grids
 from aeroza.shared.db import Database
 from aeroza.stream.publisher import (
     NowcastGridPublisher,
     NullNowcastGridPublisher,
 )
+
+# How many past observation grids to load alongside the current one.
+# Optical-flow forecasters (pySTEPS) need these; persistence ignores
+# them. 4 is a sensible upper bound — pySTEPS' Lucas–Kanade default
+# is 3, plus one in case the worker's tick races with the materialiser.
+HISTORY_DEPTH: int = 4
 
 log = structlog.get_logger(__name__)
 
@@ -95,11 +103,21 @@ async def nowcast_observation_grid(
         )
         return NowcastTickResult(persisted=(), skipped_reason=f"read_failed: {exc}")
 
+    history = await _load_history(
+        db=db,
+        product=source_file.product,
+        level=source_file.level,
+        before=source_file.valid_at,
+        skip_file_key=source_file.key,
+        n=HISTORY_DEPTH,
+    )
+
     try:
         predictions = await forecaster.forecast(
             observation,
             observation_valid_at=source_file.valid_at,
             horizons_minutes=horizons_minutes,
+            history=history,
         )
     except Exception as exc:
         log.exception(
@@ -187,6 +205,54 @@ async def _materialise_prediction(
         )
         await session.commit()
     return row
+
+
+async def _load_history(
+    *,
+    db: Database,
+    product: str,
+    level: str,
+    before: datetime,
+    skip_file_key: str,
+    n: int,
+) -> tuple[xr.DataArray, ...]:
+    """Load up to ``n - 1`` past observation grids for the optical-flow
+    forecasters' history input.
+
+    Returns DataArrays sorted oldest → newest, excluding the current
+    observation (``skip_file_key``). Failures are absorbed — a missing
+    Zarr or a stale catalog row drops that frame from the stack but
+    doesn't crash the tick.
+    """
+    if n <= 1:
+        return ()
+    async with db.sessionmaker() as session:
+        views = await find_recent_mrms_grids(
+            session,
+            product=product,
+            level=level,
+            n=n,
+            at_or_before=before,
+        )
+    history: list[xr.DataArray] = []
+    for view in views:
+        if view.file_key == skip_file_key:
+            continue
+        try:
+            da = await asyncio.to_thread(
+                _open_observation_dataarray,
+                zarr_uri=view.zarr_uri,
+                variable=view.variable,
+            )
+        except Exception as exc:
+            log.warning(
+                "nowcast.worker.history_skip",
+                zarr_uri=view.zarr_uri,
+                error=str(exc),
+            )
+            continue
+        history.append(da)
+    return tuple(history)
 
 
 def _open_observation_dataarray(*, zarr_uri: str, variable: str) -> xr.DataArray:

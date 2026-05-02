@@ -6,9 +6,9 @@ Aeroza turns weather into a queryable, streaming API. Real-time radar, predictiv
 
 ## Status
 
-**Phases 0–5 shipped.** The platform has live ingest (NWS alerts, MRMS reflectivity), queryable point/polygon/tile reads, persistence-baseline nowcasting, continuous verification with a public calibration dashboard, signed webhook delivery with an alert-rule DSL, a `@aeroza/sdk` TypeScript client, and a polished web surface (`/`, `/map`, `/calibration`, `/console`, `/docs`).
+**Phases 0–5 + pySTEPS shipped.** The platform has live ingest (NWS alerts, MRMS reflectivity), queryable point/polygon/tile reads, **two** nowcasting algorithms (persistence baseline + pySTEPS Lucas–Kanade + semi-Lagrangian extrapolation), continuous verification with a public calibration dashboard, signed webhook delivery with an alert-rule DSL, a `@aeroza/sdk` TypeScript client, and a polished web surface (`/`, `/map`, `/calibration`, `/console`, `/docs`).
 
-What's next: pySTEPS nowcasting (so the calibration moat has more than one row), auth + API keys, and additional ingest sources (NEXRAD L2, HRRR / NBM model data, METAR). See [docs/ROADMAP.md](docs/ROADMAP.md).
+What's next: ensemble forecasting (Brier / CRPS), auth + API keys, and additional ingest sources (NEXRAD L2, HRRR / NBM model data, METAR). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quickstart (development)
 
@@ -81,7 +81,9 @@ Public surface: 19 routes versioned under `/v1`. The TypeScript SDK in [`sdk-ts/
 
 ## Optional extras
 
-`uv sync --all-extras` skips heavy native dependencies. To decode MRMS GRIB2 files via [`cfgrib`](aeroza/ingest/mrms_decode.py), install the `[grib]` extra and the system `eccodes` library:
+`uv sync --all-extras` skips heavy native dependencies. Two are worth knowing about.
+
+**`[grib]`** — `cfgrib` for decoding MRMS GRIB2 files:
 
 ```bash
 # macOS
@@ -93,7 +95,22 @@ sudo apt-get install -y libeccodes-dev
 uv sync --extra grib
 ```
 
-The decode path lazy-loads `cfgrib` so unit tests stay green without `eccodes` installed; only the actual end-to-end materialisation needs the system library.
+The decode path lazy-loads `cfgrib`, so unit tests stay green without `eccodes` installed; only the actual end-to-end materialisation needs the system library.
+
+**`[nowcast]`** — `pysteps` for the optical-flow nowcaster:
+
+```bash
+# Linux: pysteps' setup.py just works.
+uv sync --extra nowcast
+
+# macOS: pysteps' setup.py uses raw -fopenmp, which Apple clang doesn't accept.
+brew install libomp
+CFLAGS="-Xpreprocessor -fopenmp -I$(brew --prefix libomp)/include" \
+LDFLAGS="-L$(brew --prefix libomp)/lib -lomp" \
+uv sync --extra nowcast
+```
+
+`PystepsForecaster` is opt-in via `aeroza-nowcast-mrms --algorithm pysteps`; without the extra installed the worker keeps running the persistence baseline.
 
 ## License
 

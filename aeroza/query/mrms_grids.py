@@ -138,6 +138,42 @@ async def find_mrms_grid_by_key(
     return _row_to_view(row)
 
 
+async def find_recent_mrms_grids(
+    session: AsyncSession,
+    *,
+    product: str,
+    level: str,
+    n: int,
+    at_or_before: datetime | None = None,
+) -> tuple[MrmsGridView, ...]:
+    """Return the ``n`` most-recent grids for ``product``/``level``.
+
+    Result is sorted by ``valid_at`` ascending (oldest → newest), which
+    is the order the pySTEPS optical-flow code wants ``(T, y, x)``
+    stacks in. Fewer than ``n`` rows are returned if the catalog is
+    short on history (e.g. cold start). When ``at_or_before`` is set,
+    only grids with ``valid_at <= at_or_before`` are considered.
+    """
+    if n <= 0:
+        return ()
+    # Pull the newest ``n`` and reverse client-side. Doing an ASC + LIMIT
+    # would scan from the start of the table, which is the wrong end for
+    # "most recent".
+    stmt = (
+        select(*_BASE_COLUMNS)
+        .join(MrmsFileRow, MrmsFileRow.key == MrmsGridRow.file_key)
+        .where(MrmsFileRow.product == product, MrmsFileRow.level == level)
+        .order_by(MrmsFileRow.valid_at.desc())
+        .limit(n)
+    )
+    if at_or_before is not None:
+        stmt = stmt.where(MrmsFileRow.valid_at <= at_or_before)
+    result = await session.execute(stmt)
+    views = [_row_to_view(row) for row in result.mappings()]
+    views.reverse()  # oldest first
+    return tuple(views)
+
+
 async def find_latest_mrms_grid(
     session: AsyncSession,
     *,
