@@ -12,11 +12,13 @@ import json
 from typing import Any, Final
 
 import structlog
-from sqlalchemy import func, literal_column, or_
+from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aeroza.ingest.mrms import MrmsFile
 from aeroza.ingest.mrms_grids_models import MrmsGridRow
+from aeroza.ingest.mrms_models import MrmsFileRow
 from aeroza.ingest.mrms_zarr import MrmsGridLocator, locator_to_row_dict
 
 log = structlog.get_logger(__name__)
@@ -71,6 +73,51 @@ def _changed_predicate(stmt: Any) -> Any:
     excluded = stmt.excluded
     table = MrmsGridRow.__table__
     return or_(*(table.c[col].is_distinct_from(excluded[col]) for col in _MUTABLE_COLUMNS))
+
+
+async def find_unmaterialised_files(
+    session: AsyncSession,
+    *,
+    product: str,
+    level: str,
+    limit: int = 16,
+) -> tuple[MrmsFile, ...]:
+    """Return MRMS catalog rows that have no matching ``mrms_grids`` row.
+
+    Ordered by ``valid_at`` descending so the most-recent files
+    materialise first — matches the user-visible "what's the latest grid?"
+    expectation when the worker is catching up after downtime.
+
+    The ``LEFT JOIN … WHERE g.file_key IS NULL`` shape is the canonical
+    "anti-join" for "rows in A without a match in B". For the catalog
+    sizes we expect (a few thousand rows per day per product) this is
+    perfectly serviceable; we don't need a partial index until backlog
+    grows much larger.
+    """
+    stmt = (
+        select(MrmsFileRow)
+        .outerjoin(MrmsGridRow, MrmsGridRow.file_key == MrmsFileRow.key)
+        .where(
+            MrmsFileRow.product == product,
+            MrmsFileRow.level == level,
+            MrmsGridRow.file_key.is_(None),
+        )
+        .order_by(MrmsFileRow.valid_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return tuple(_row_to_file(row) for row in rows)
+
+
+def _row_to_file(row: MrmsFileRow) -> MrmsFile:
+    return MrmsFile(
+        key=row.key,
+        product=row.product,
+        level=row.level,
+        valid_at=row.valid_at,
+        size_bytes=row.size_bytes,
+        etag=row.etag,
+    )
 
 
 def parse_dims_shape(row: MrmsGridRow) -> tuple[tuple[str, ...], tuple[int, ...]]:
