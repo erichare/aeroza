@@ -79,16 +79,21 @@ Workstreams roughly equal in priority. Reordering to taste; nothing is locked in
 
 The next step on the *probabilistic* verification side is multi-member ensemble runs (pysteps' STEPS mode supports them out of the box). Ensemble output unlocks Brier scores, reliability diagrams, and CRPS — the proper probabilistic complement to the categorical POD/FAR/CSI scores phase 6b ships. Goes hand-in-hand with a "champion / challenger" mechanism that calibrates new algorithms against persistence before promoting them.
 
-### Auth + API keys
+### Phase 6c — Auth + API keys
 
-Currently every route is anonymous. Before any external user, we need:
+Bearer-token API keys now exist server-side. The format on the wire is `Authorization: Bearer aza_live_<random>`; the random portion is HMAC-SHA-256-hashed against `AEROZA_API_KEY_SALT` and only the digest is persisted. Operators mint keys with the `aeroza-api-keys` CLI (`create` / `list` / `revoke`); HTTP CRUD lands once we have an admin scope to gate it on.
 
-- `api_keys` table with hashed secret + scopes + rate-limit class.
-- Bearer-token middleware (FastAPI dependency).
-- Per-key rate limiting (Redis token-bucket).
-- A `/v1/me` introspection route so consumers can check their own key.
+Auth is **opt-in** via `AEROZA_AUTH_REQUIRED` (default `false`). When the flag is off, anonymous traffic still works — the dependency records who is calling for telemetry but doesn't enforce. Flipping the flag on makes `require_api_key` a precondition wherever it's wired.
 
-The webhooks subsystem already understands signed payloads — auth on the read side fits the same shape.
+Public surface this slice ships:
+
+- `GET /v1/me` — introspect the calling key (name, owner, scopes, prefix, last-used, rate-limit class). Always requires a key.
+
+What's still out of scope (intentionally) for v1:
+
+- HTTP CRUD over `/v1/api-keys` — the CLI is the management plane until we have an admin scope.
+- Per-key rate limiting (Redis token-bucket). The `rate_limit_class` column exists; the dependency that reads it lands once enforcement turns on.
+- Scope-aware route gating. The shape is in place (keys carry a `scopes: text[]`); the per-route enforcement comes alongside the rate limiter.
 
 ### More ingest sources
 

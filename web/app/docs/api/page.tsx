@@ -36,6 +36,14 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
         summary: "Compact 'what does the system know right now?' snapshot.",
         notes: "Alert counts, MRMS file/grid counts, freshness watermarks.",
       },
+      {
+        method: "GET",
+        path: "/v1/me",
+        summary: "Introspect the calling API key (name, owner, scopes, last-used).",
+        notes:
+          "Requires Authorization: Bearer aza_live_*. Mint keys with the " +
+          "aeroza-api-keys CLI; the operator's only management plane in v1.",
+      },
     ],
   },
   {

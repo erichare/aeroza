@@ -132,6 +132,23 @@ export interface Health {
   version: string;
 }
 
+// ---------------------------------------------------------------------------
+// Auth
+//
+// The bearer-token format on the wire is `Authorization: Bearer aza_live_*`.
+// `Me` is what `GET /v1/me` returns — the calling key's metadata, redacted
+// to what the caller already knows.
+
+export interface Me {
+  type: "Me";
+  name: string;
+  prefix: string;
+  owner: string;
+  scopes: string[];
+  rateLimitClass: string;
+  lastUsedAt: string | null;
+}
+
 export interface AlertsStats {
   total: number;
   active: number;

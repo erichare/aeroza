@@ -359,6 +359,26 @@ export default function ConceptsPage() {
         designed to be polled every 10–30 seconds by a dashboard.
       </p>
 
+      <h2>API keys &amp; auth</h2>
+      <p>
+        Every route is anonymous by default. Bearer-token auth exists
+        server-side and is opt-in per deployment via{" "}
+        <code>AEROZA_AUTH_REQUIRED=true</code>. Tokens are minted with
+        the <code>aeroza-api-keys</code> CLI and have the format{" "}
+        <code>aza_live_&lt;random&gt;</code>; only the HMAC-SHA-256 hash
+        is persisted, keyed by <code>AEROZA_API_KEY_SALT</code> for
+        domain separation.
+      </p>
+      <p>
+        Pass the token as <code>Authorization: Bearer &lt;token&gt;</code>{" "}
+        (or set <code>apiKey</code> on the SDK client). Currently the only
+        gated route is <code>GET /v1/me</code>, which returns the calling
+        key's metadata: name, owner, prefix (visible identifier),
+        scopes, rate-limit class, and last-used timestamp. HTTP CRUD
+        over <code>/v1/api-keys</code> arrives once we have an admin scope
+        to gate it on; until then the CLI is the management plane.
+      </p>
+
       <hr />
 
       <p>
