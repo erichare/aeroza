@@ -1,14 +1,14 @@
-# Aeroza · dev console
+# Aeroza · web
 
-A minimal Next.js 15 app that visualises the Aeroza FastAPI surface. Four panels:
+The Next.js 15 app that ships the public face of Aeroza. Five surfaces:
 
-- **Alerts · live stream** — `/v1/alerts/stream` (SSE) plus a polled `/v1/alerts` list.
-- **MRMS · file catalog** — `/v1/mrms/files` with a sliver-timeline of `valid_at` and per-row stats.
-- **MRMS · materialised grids** — `/v1/mrms/grids` with locator metadata (variable, shape, dtype, Zarr URI).
-- **System · health & stats** — `/health` + `/v1/stats` polled every 10 s: alerts active/total, MRMS files vs grids materialised, freshness watermarks.
+- **`/`** — landing page (hero, three feature cards, primary CTA into `/map`).
+- **`/map`** — interactive map. MapLibre raster basemap (CARTO Voyager light) + alert GeoJSON polygons coloured by severity + MRMS reflectivity raster overlay (toggleable) + scrubbable 6-hour timeline that filters alerts client-side by their `effective` / `expires` window.
+- **`/calibration`** — `(algorithm × forecast horizon)` MAE / bias / RMSE matrix with a per-row sparkline trending the metric over the requested window (1h / 6h / 24h / 7d / 30d).
+- **`/console`** — dev panels: live alerts SSE stream, MRMS file catalog, materialised grids, point sample, system health.
+- **`/docs`** — overview / quickstart / concepts / API reference, with editorial typography.
 
-This is the dev/demo client. The polished Phase 5 reference web app
-(MapLibre + scrubbable timeline + landing page) will replace it later.
+Every fetch flows through `@aeroza/sdk` (the workspace's TypeScript SDK), so any awkwardness in the API contract surfaces here first.
 
 ## Run it
 
@@ -16,12 +16,14 @@ This is the dev/demo client. The polished Phase 5 reference web app
 # From the repo root: brings up Postgres + Redis + NATS, runs FastAPI on :8000.
 make dev
 
-# In a second terminal:
-cd web
-npm install
-npm run dev
-# Console: http://localhost:3000
-# FastAPI: http://localhost:8000
+# In separate terminals, start the long-running ingesters so the web has
+# real data to render.
+make ingest-alerts
+make ingest-mrms
+make materialise-mrms
+
+# In another terminal:
+make web-dev      # http://localhost:3000
 ```
 
 The default API base is `http://localhost:8000`. Override with:
@@ -30,24 +32,24 @@ The default API base is `http://localhost:8000`. Override with:
 NEXT_PUBLIC_AEROZA_API_URL=https://staging.example.com npm run dev
 ```
 
-## Why no MapLibre / GraphQL / SDK yet?
+## End-to-end smoke
 
-Scope. This console exists to make the *current* backend feel real today —
-the SSE stream is the hardest thing to demo without a UI, and the MRMS
-catalog goes from "rows in Postgres" to "files arriving every 2 minutes"
-much faster when you can see the timeline tick.
+A Playwright spec at `e2e/map.spec.ts` loads `/map`, waits for the MapLibre style + first frame, then screenshots the canvas and asserts non-zero alpha pixels — robust across drivers because it goes through the page compositor (not WebGL `readPixels`, whose back buffer is undefined after the swap).
 
-A future iteration will render the most-recent reflectivity grid as a
-quick canvas heatmap once the API serves array slices (currently only
-locator metadata is exposed). The map (MapLibre + vector tiles) belongs
-to the Phase 5 polished client.
+```bash
+make web-dev               # one terminal — keep it running
+npm --prefix web run test:e2e
+```
+
+CI runs the same spec in the `web · Playwright /map smoke` job.
 
 ## Stack
 
-- Next.js 15 (App Router) + React 19
-- TypeScript strict
-- Tailwind CSS for styling (no component library)
-- Native `EventSource` for SSE; native `fetch` for REST
+- Next.js 15 (App Router) + React 19, TypeScript strict.
+- Tailwind CSS with a hand-rolled warm palette (cream parchment + ember accent + cocoa text).
+- `next/font/google` for Inter (sans), Fraunces (display), JetBrains Mono.
+- MapLibre GL JS for the map surface; raster tiles only — vector MVT is roadmap.
+- Native `EventSource` for SSE, native `fetch` for REST.
+- `@aeroza/sdk` from the workspace — typed wrapper over the v1 REST API.
 
-No SWR, no axios, no shadcn — the surface is small and the dependency
-budget is intentionally tight.
+No SWR, no axios, no shadcn. The surface is small and the dependency budget is intentionally tight.
