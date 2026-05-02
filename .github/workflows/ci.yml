@@ -139,9 +139,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # NATS is best-effort at API startup, but `nats.connect` retries for
+      # ~2 minutes on a refused connection — much longer than our health
+      # poll. Run a NATS service so the API's lifespan finishes promptly.
+      nats:
+        image: nats:2.10
+        ports:
+          - 4222:4222
 
     env:
       DATABASE_URL: postgresql+asyncpg://aeroza:aeroza@localhost:5432/aeroza
+      AEROZA_NATS_URL: nats://localhost:4222
       NEXT_PUBLIC_AEROZA_API_URL: http://localhost:8000
       AEROZA_WEB_E2E_PORT: "3100"
       AEROZA_WEB_E2E_REUSE_SERVER: "1"
