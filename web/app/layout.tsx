@@ -1,10 +1,16 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+import { SiteNav } from "@/components/SiteNav";
+
 export const metadata: Metadata = {
-  title: "Aeroza · Dev Console",
+  title: {
+    default: "Aeroza · Weather, but queryable.",
+    template: "%s · Aeroza",
+  },
   description:
-    "Live test harness for the Aeroza weather-intelligence API: alerts SSE stream, MRMS catalog, system health.",
+    "Programmable weather intelligence: streaming APIs, geospatial queries, and " +
+    "probabilistic nowcasting for modern applications.",
 };
 
 export default function RootLayout({
@@ -14,7 +20,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className="font-sans antialiased">{children}</body>
+      <body className="font-sans antialiased">
+        <SiteNav />
+        {children}
+      </body>
     </html>
   );
 }
