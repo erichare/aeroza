@@ -18,10 +18,12 @@ Requires Docker, Node 20+, and [uv](https://docs.astral.sh/uv/).
 make start
 ```
 
-That single command runs `make doctor` (preflight check), `make bootstrap` (creates `.env` with a real signing salt, syncs Python deps, starts Postgres / Redis / NATS, applies migrations), then launches the full stack via [honcho](https://github.com/nickstenning/honcho) and [`Procfile.dev`](Procfile.dev): FastAPI on :8000, the Next.js console on :3000, plus the alerts / MRMS / METAR ingest workers and the webhook dispatcher. Ctrl+C tears everything down in one shot.
+That single command runs `make doctor` (preflight check), `make bootstrap` (creates `.env` with a real signing salt, syncs Python deps, starts Postgres / Redis / NATS, applies migrations), then launches the full stack via [honcho](https://github.com/nickstenning/honcho) under [`scripts/start-stack.sh`](scripts/start-stack.sh): FastAPI on :8000, the Next.js console on :3000, plus the alerts / MRMS / METAR ingest workers and the webhook dispatcher. When the `[grib]` extra is installed (`make extras-grib`), the launcher also runs the GRIB → Zarr materialiser, the **lagged-ensemble** nowcaster, and the verifier so the radar replay and `/calibration` light up out of the box. Ctrl+C tears everything down in one shot.
 
 - API: <http://localhost:8000> — health at `/health`, Swagger at `/docs`.
 - Console: <http://localhost:3000> — landing, `/map`, `/calibration`, `/console`, `/docs`.
+
+**A backgrounded historical seed** (`scripts/seed-historical.sh`) kicks off automatically on first `make start`: it backfills ~3 hours of historical MRMS data via `aeroza-ingest-mrms --at-time` and drains the materialiser in `--once` batches if cfgrib is available, so the dashboard fills in over the first couple of minutes instead of staring at empty panels until live ingest catches up. Idempotent — re-runs short-circuit when the catalog already has data. Tail the log with `tail -f .seed.log`, or run it explicitly with `make seed`.
 
 Run `make stop` to bring down the docker layer when you're done. Re-running `make start` is idempotent.
 
@@ -38,6 +40,8 @@ make ingest-mrms          # MRMS file catalog → /v1/mrms/files — terminal 4
 make ingest-metar         # METAR observations → /v1/metar — terminal 5
 make materialise-mrms     # MRMS GRIB2 → Zarr → /v1/mrms/grids* (needs `[grib]`)
 make nowcast-persistence  # Persistence-baseline nowcaster
+make nowcast-lagged-ensemble  # Probabilistic baseline (Brier/CRPS) — no extras needed
+make seed                 # Backfill ~3h of historical data so the dashboard isn't empty (idempotent)
 uv run pytest             # Run unit tests
 ```
 
