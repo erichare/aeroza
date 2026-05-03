@@ -229,7 +229,16 @@ export function AlertsMap({
           // doesn't reach (e.g. when MapLibre is upscaling between zoom
           // levels mid-pinch).
           "raster-resampling": "linear",
-          "raster-fade-duration": 200,
+          // Fade duration is a function of mode. In live mode (no
+          // radarFileKey) we fade quickly because each tile-URL swap is a
+          // refresh, not a logical step in time. In pinned mode (the
+          // /demo replay) we fade much longer so the eye reads
+          // consecutive frames as continuous motion rather than discrete
+          // jumps. 700ms was chosen against the 800ms-hold of the slowest
+          // playback speed — the fade fits within the hold but only
+          // barely, so the next frame is already ramping in by the time
+          // the previous fully clears.
+          "raster-fade-duration": radarFileKey === null ? 200 : 700,
         },
       });
 
