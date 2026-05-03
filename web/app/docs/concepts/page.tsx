@@ -102,7 +102,14 @@ export default function ConceptsPage() {
         yet) come back as a fully-transparent PNG so MapLibre / Leaflet
         don't spam 404 retries. <code>fileKey</code> pins a specific
         grid — used by the timeline scrubber on{" "}
-        <Link href="/map">/map</Link> to fetch historical tiles.
+        <Link href="/map">/map</Link> to fetch historical tiles. The
+        same <code>fileKey</code> mechanism powers the <strong>1-hour
+        radar auto-loop</strong> in <Link href="/map">/map</Link>'s
+        header: the page boots playing through every grid in the last
+        hour at 2× by default, with a speed selector (1×/2×/4×/8×) for
+        slowing down to inspect a developing storm cell. Scrubbing the
+        timeline pauses the loop; pressing <strong>▶ Loop 1h</strong>{" "}
+        resumes it.
       </p>
 
       <h2>Point sample</h2>
