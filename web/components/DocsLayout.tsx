@@ -14,7 +14,12 @@ const SECTIONS: ReadonlyArray<DocsSection> = [
   { href: "/docs", label: "Overview", description: "What Aeroza is + where to go" },
   { href: "/docs/quickstart", label: "Quickstart", description: "Run it locally in 5 minutes" },
   { href: "/docs/concepts", label: "Concepts", description: "Alerts, MRMS, sample, polygon" },
-  { href: "/docs/api", label: "API reference", description: "Routes + interactive Swagger" },
+  { href: "/docs/api", label: "API reference", description: "Every route, sectioned by domain" },
+  {
+    href: "/docs/api/explorer",
+    label: "API explorer",
+    description: "Interactive client (Scalar)",
+  },
 ];
 
 interface DocsLayoutProps {
@@ -38,10 +43,20 @@ export function DocsLayout({ children }: DocsLayoutProps) {
             Docs
           </span>
           {SECTIONS.map((section) => {
-            const active =
-              section.href === "/docs"
-                ? pathname === "/docs"
-                : pathname?.startsWith(section.href);
+            // Active rules:
+            //   - /docs               : exact match only (otherwise it lights
+            //                           up for every nested page).
+            //   - /docs/api           : exact match — its child route
+            //                           /docs/api/explorer has its own entry,
+            //                           so a startsWith match would double-
+            //                           highlight on the explorer page.
+            //   - everything else     : prefix match (e.g. a future
+            //                           /docs/quickstart/cli still lights up
+            //                           Quickstart).
+            const exactOnly = section.href === "/docs" || section.href === "/docs/api";
+            const active = exactOnly
+              ? pathname === section.href
+              : pathname?.startsWith(section.href);
             return (
               <Link
                 key={section.href}

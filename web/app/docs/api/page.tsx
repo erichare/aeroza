@@ -262,17 +262,35 @@ export default function ApiReferencePage() {
     <DocsLayout>
       <h1>API reference</h1>
       <p>
-        Every public route on the Aeroza v1 API. The interactive request
-        builder lives at{" "}
-        <a href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">
-          {API_BASE}/docs
-        </a>{" "}
-        (Swagger UI, auto-generated from FastAPI). The raw schema is at{" "}
-        <a href={`${API_BASE}/openapi.json`} target="_blank" rel="noreferrer">
-          {API_BASE}/openapi.json
-        </a>{" "}
-        — point any codegen tool at it.
+        Every public route on the Aeroza v1 API, organised by domain. Use
+        this page when you want a one-screen survey of the surface; use the{" "}
+        <Link href="/docs/api/explorer">interactive explorer</Link> when you
+        want to inspect schemas and send requests directly from the page.
       </p>
+      <p>
+        Three ways to drive the API interactively:
+      </p>
+      <ul>
+        <li>
+          <Link href="/docs/api/explorer">/docs/api/explorer</Link> — the
+          embedded Scalar reference (recommended). Themed to match the rest
+          of the site, three-column layout, code samples in shell / JS /
+          Python out of the box.
+        </li>
+        <li>
+          <a href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">
+            {API_BASE}/docs
+          </a>{" "}
+          — FastAPI's built-in Swagger UI. Plain but always 1:1 with the
+          server's current shape.
+        </li>
+        <li>
+          <a href={`${API_BASE}/openapi.json`} target="_blank" rel="noreferrer">
+            {API_BASE}/openapi.json
+          </a>{" "}
+          — the raw OpenAPI schema. Point any codegen tool at it.
+        </li>
+      </ul>
 
       <h2>Conventions</h2>
       <ul>
