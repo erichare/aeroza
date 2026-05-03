@@ -91,4 +91,17 @@ test.describe("/map", () => {
 
     expect(visiblePixelCount).toBeGreaterThan(0);
   });
+
+  test("loop control is present in the header (disabled when archive is empty)", async ({
+    page,
+  }) => {
+    await page.goto("/map");
+
+    // The "Loop 1h" toggle should always render in the header — it's
+    // either the play affordance (when ≥2 grids exist in the last
+    // hour) or a disabled placeholder explaining why it can't run.
+    // Either way the user knows the affordance exists.
+    const loopButton = page.getByRole("button", { name: /loop 1h/i });
+    await expect(loopButton).toBeVisible();
+  });
 });
