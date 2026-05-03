@@ -170,6 +170,14 @@ export default function MapPage() {
 
   const loopActive = loopPlaying && loopGrids.length >= 2;
   const loopGrid = loopActive ? (loopGrids[loopFrame] ?? null) : null;
+  // Prefetch hint for the next frame's tiles. AlertsMap uses this to
+  // warm the browser cache (and the server-side LRU + immutable
+  // Cache-Control headers) so the swap to the next frame is instant
+  // — the loop turns into a series of cache hits after the first
+  // iteration.
+  const nextLoopGrid = loopActive
+    ? (loopGrids[(loopFrame + 1) % loopGrids.length] ?? null)
+    : null;
 
   // Build scrubber tick marks from the recent grids — same shape the
   // TimelineScrubber consumed before this refactor, so the visible
@@ -318,6 +326,7 @@ export default function MapPage() {
         <AlertsMap
           displayedAt={loopActive ? effectiveDisplayedAt : isLive ? null : displayedAt}
           radarFileKey={loopGrid?.fileKey ?? null}
+          prefetchNextFileKey={nextLoopGrid?.fileKey ?? null}
           showRadar={showRadar}
           onLoaded={handleLoaded}
         />

@@ -212,3 +212,60 @@ async def test_unknown_file_key_falls_back_to_transparent(
     assert response.status_code == 200
     alpha = _decode_alpha(response.content)
     assert (alpha == 0).all()
+
+
+async def test_pinned_tile_emits_immutable_cache_header_and_caches_server_side(
+    api_client: AsyncClient, integration_db: Database, tmp_path: Path
+) -> None:
+    """When the request pins a fileKey, the response is forever-immutable
+    (the source grid never changes), so:
+
+    * ``Cache-Control: public, max-age=31536000, immutable`` — lets
+      browsers + CDNs hold the tile across the radar replay loop.
+    * The first request renders + populates the LRU
+      (``X-Aeroza-Tile-Cache: miss``).
+    * The second request hits the LRU
+      (``X-Aeroza-Tile-Cache: hit``) and the bytes are byte-identical.
+    """
+    from aeroza.tiles.cache import TilePngCache, set_default_cache
+
+    set_default_cache(TilePngCache(max_bytes=1024 * 1024))
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("pinned-key", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    first = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=pinned-key")
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert first.headers["x-aeroza-tile-cache"] == "miss"
+
+    second = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=pinned-key")
+    assert second.status_code == 200
+    assert second.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert second.headers["x-aeroza-tile-cache"] == "hit"
+    # Bytes are deterministic — the LRU returns the same render the
+    # first request produced.
+    assert second.content == first.content
+
+
+async def test_live_tile_keeps_short_ttl_and_bypasses_lru(
+    api_client: AsyncClient, integration_db: Database, tmp_path: Path
+) -> None:
+    """Live-mode tiles (no fileKey) still get the short TTL and are
+    deliberately not server-cached — the latest grid moves with new
+    ingests, so caching the rendered bytes by zoom/coords would race
+    the materialiser."""
+    from aeroza.tiles.cache import TilePngCache, set_default_cache
+
+    set_default_cache(TilePngCache(max_bytes=1024 * 1024))
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("k1", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png")
+    assert response.status_code == 200
+    assert "max-age=60" in response.headers["cache-control"]
+    assert "immutable" not in response.headers["cache-control"]
+    assert response.headers["x-aeroza-tile-cache"] == "bypass"
