@@ -119,15 +119,33 @@ function SubscriptionRow({ sub }: { sub: WebhookSubscriptionRedacted }) {
 function EmptyState() {
   return (
     <div className="rounded-xl border border-dashed border-border/60 bg-bg/30 px-5 py-6 text-center">
-      <p className="text-sm text-muted">No webhook subscriptions yet.</p>
-      <p className="mt-1 text-xs text-muted/70">
-        Create one with <code className="font-mono">POST /v1/webhooks</code> or
-        the <a
+      <p className="text-sm text-text">No webhook subscriptions yet.</p>
+      <p className="mt-1 text-xs text-muted">
+        Webhooks fire on every <code className="font-mono">aeroza.alerts.nws.new</code>{" "}
+        and <code className="font-mono">aeroza.nowcast.grids.new</code> event,
+        signed with HMAC-SHA256 in the <code className="font-mono">Aeroza-Signature</code> header.
+      </p>
+      <p className="mt-3 text-xs text-muted/80">
+        Create one via <code className="font-mono">POST /v1/webhooks</code> or
+        the{" "}
+        <a
           href="http://localhost:8000/docs#/webhooks"
           target="_blank"
           rel="noreferrer"
           className="text-accent underline"
-        >Swagger UI</a>.
+        >
+          Swagger UI
+        </a>
+        . An in-console editor is on the{" "}
+        <a
+          href="https://github.com/erichare/aeroza/blob/main/docs/ROADMAP.md"
+          target="_blank"
+          rel="noreferrer"
+          className="text-accent underline"
+        >
+          roadmap
+        </a>
+        .
       </p>
     </div>
   );

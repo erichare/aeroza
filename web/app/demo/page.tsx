@@ -194,11 +194,17 @@ export default function DemoPage() {
         currentGrid={currentGrid}
         isPlaying={isPlaying}
         speed={speed}
+        mode={mode}
         disabled={isCommentaryOnly || (grids?.length ?? 0) < 2}
         onTogglePlay={() => setIsPlaying((v) => !v)}
         onSeek={setFrameIndex}
         onSpeedChange={setSpeed}
         onRefresh={loadGrids}
+        onJumpToLatest={() => {
+          if (grids === null || grids.length === 0) return;
+          setFrameIndex(grids.length - 1);
+          setIsPlaying(true);
+        }}
       />
     </main>
   );
@@ -412,23 +418,39 @@ function PlaybackBar({
   currentGrid,
   isPlaying,
   speed,
+  mode,
   disabled,
   onTogglePlay,
   onSeek,
   onSpeedChange,
   onRefresh,
+  onJumpToLatest,
 }: {
   frameIndex: number;
   totalFrames: number;
   currentGrid: MrmsGridItem | null;
   isPlaying: boolean;
   speed: PlaybackSpeed;
+  mode: Mode;
   disabled: boolean;
   onTogglePlay: () => void;
   onSeek: (frame: number) => void;
   onSpeedChange: (speed: PlaybackSpeed) => void;
   onRefresh: () => void;
+  onJumpToLatest: () => void;
 }) {
+  // The "Latest" button is meaningful in both modes — it skips to the
+  // most recent frame and resumes — but the *label* differs: in live
+  // archive it's literally "now"; in a featured event it's the end of
+  // the curated window. We surface both intents under one shared
+  // button so muscle memory carries between modes.
+  const atLatest = totalFrames > 0 && frameIndex >= totalFrames - 1;
+  const latestLabel = mode.kind === "live" ? "Now" : "End";
+  const latestTitle =
+    mode.kind === "live"
+      ? "Skip to the most recent frame in the live archive and resume"
+      : "Skip to the end of this event's replay window and resume";
+
   return (
     <footer className="border-t border-border/60 bg-bg/60 px-6 py-3 backdrop-blur">
       <div className="flex items-center gap-3">
@@ -461,6 +483,17 @@ function PlaybackBar({
           className="h-1.5 flex-1 cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-40"
         />
 
+        <button
+          type="button"
+          onClick={onJumpToLatest}
+          disabled={disabled || atLatest}
+          aria-label={latestTitle}
+          title={latestTitle}
+          className="rounded-md border border-border/60 px-2.5 py-1 font-mono text-[11px] text-muted transition-colors hover:border-accent/60 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {latestLabel} ↘
+        </button>
+
         <SpeedSwitcher value={speed} onChange={onSpeedChange} disabled={disabled} />
 
         <button
@@ -475,6 +508,14 @@ function PlaybackBar({
 
       {currentGrid ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-muted">
+          {!isPlaying && !disabled ? (
+            <span
+              className="rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-wider text-warning"
+              title="The replay is paused — the timestamp will not advance until you press play"
+            >
+              paused
+            </span>
+          ) : null}
           <span>
             <span className="uppercase tracking-wide">grid</span>{" "}
             <span className="text-text">{currentGrid.product}</span> · level{" "}

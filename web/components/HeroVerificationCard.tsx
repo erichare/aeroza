@@ -60,10 +60,14 @@ export function HeroVerificationCard() {
     };
   }, []);
 
-  // Pick the row most viewers will read first: the persistence baseline
-  // at 30 min, our load-bearing default. Falls back to whatever's there
-  // if the worker hasn't scored a 30-min row yet.
-  const headlineRow = useMemo(() => pickHeadlineRow(items ?? []), [items]);
+  // Pick the row most viewers will read first. Probabilistic-skill
+  // (Brier) on an ensemble row at 30 min is the strongest pitch when
+  // available; otherwise we fall back to MAE on the persistence
+  // baseline at 30 min. The selection is dynamic so the hero
+  // auto-upgrades from "deterministic MAE" to "publicly verified
+  // probabilistic skill" the moment the lagged-ensemble worker starts
+  // running.
+  const headline = useMemo(() => pickHeadline(items ?? []), [items]);
 
   const totalSamples = useMemo(
     () => (items ?? []).reduce((sum, row) => sum + row.sampleCount, 0),
@@ -100,7 +104,7 @@ export function HeroVerificationCard() {
       ) : (
         <>
           <HeadlineMetric
-            row={headlineRow}
+            headline={headline}
             totalSamples={totalSamples}
             totalVerifications={totalVerifications}
           />
@@ -118,30 +122,54 @@ export function HeroVerificationCard() {
   );
 }
 
+interface Headline {
+  row: CalibrationItem;
+  /** "brier" when an ensemble row is leading; "mae" when we fell back to deterministic. */
+  kind: "brier" | "mae";
+  value: number;
+}
+
 function HeadlineMetric({
-  row,
+  headline,
   totalSamples,
   totalVerifications,
 }: {
-  row: CalibrationItem | null;
+  headline: Headline | null;
   totalSamples: number;
   totalVerifications: number;
 }) {
-  if (!row) return null;
+  if (!headline) return null;
+  const { row, kind, value } = headline;
+  const valueLabel = kind === "brier" ? "Brier score" : "dBZ MAE";
+  const formatted = kind === "brier" ? value.toFixed(3) : value.toFixed(2);
+  // Auto-upgrade microcopy: "probabilistic" leads when an ensemble row
+  // is in play, otherwise "deterministic". Keeps the visitor oriented
+  // around what they're seeing without a legend.
+  const flavour =
+    kind === "brier"
+      ? `Brier ∈ [0, 1] · ${labelFor(row.algorithm)}${
+          row.ensembleSize ? ` (M=${row.ensembleSize})` : ""
+        } · ${row.forecastHorizonMinutes}-min horizon · last ${WINDOW_HOURS}h`
+      : `${labelFor(row.algorithm)} · ${row.forecastHorizonMinutes}-min horizon · last ${WINDOW_HOURS}h`;
   return (
     <div className="rounded-xl border border-border/60 bg-bg/40 p-4">
       <div className="flex items-baseline gap-2">
         <span className="font-display text-3xl font-semibold tabular-nums text-text">
-          {row.maeMean.toFixed(2)}
+          {formatted}
         </span>
         <span className="font-mono text-[11px] uppercase tracking-wide text-muted">
-          dBZ MAE
+          {valueLabel}
         </span>
+        {kind === "brier" ? (
+          <span
+            className="ml-1 rounded-sm border border-accent/40 bg-accent/10 px-1.5 py-px font-mono text-[9px] uppercase tracking-wider text-accent"
+            title="Ensemble probabilistic skill score — the proper complement to deterministic MAE"
+          >
+            ensemble
+          </span>
+        ) : null}
       </div>
-      <p className="mt-1 text-[11px] text-muted">
-        {labelFor(row.algorithm)} · {row.forecastHorizonMinutes}-min horizon ·
-        last {WINDOW_HOURS}h
-      </p>
+      <p className="mt-1 text-[11px] text-muted">{flavour}</p>
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-muted">
         <span>
           <span className="text-text">{formatCount(totalVerifications)}</span>{" "}
@@ -262,22 +290,50 @@ function ErrorState({ message }: { message: string }) {
   );
 }
 
-function pickHeadlineRow(
+function pickHeadline(
   items: ReadonlyArray<CalibrationItem>,
-): CalibrationItem | null {
+): Headline | null {
   if (items.length === 0) return null;
-  // Prefer persistence at 30 min — the canonical "is the moat working"
-  // anchor. Fall back to any 30-min row, then the lowest-horizon row.
-  const persistence30 = items.find(
+
+  // Probabilistic skill at 30 min is the strongest pitch when present
+  // — the moment an ensemble worker has scored anything, the hero
+  // upgrades to "publicly verified probabilistic skill".
+  const ensemble30 = items.find(
     (i) =>
-      i.algorithm === "persistence" && i.forecastHorizonMinutes === 30,
+      i.brierMean !== null &&
+      i.forecastHorizonMinutes === 30 &&
+      i.algorithm !== "persistence",
   );
-  if (persistence30) return persistence30;
+  if (ensemble30 && ensemble30.brierMean !== null) {
+    return { row: ensemble30, kind: "brier", value: ensemble30.brierMean };
+  }
+  // Any ensemble row, lowest horizon first — still better pitch than
+  // deterministic on most days.
+  const sortedEnsemble = [...items]
+    .filter((i) => i.brierMean !== null)
+    .sort((a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes);
+  if (sortedEnsemble.length > 0 && sortedEnsemble[0].brierMean !== null) {
+    return {
+      row: sortedEnsemble[0],
+      kind: "brier",
+      value: sortedEnsemble[0].brierMean,
+    };
+  }
+
+  // Deterministic fall-back: persistence at 30 min, then any 30-min
+  // row, then the lowest-horizon row.
+  const persistence30 = items.find(
+    (i) => i.algorithm === "persistence" && i.forecastHorizonMinutes === 30,
+  );
+  if (persistence30) {
+    return { row: persistence30, kind: "mae", value: persistence30.maeMean };
+  }
   const any30 = items.find((i) => i.forecastHorizonMinutes === 30);
-  if (any30) return any30;
-  return [...items].sort(
+  if (any30) return { row: any30, kind: "mae", value: any30.maeMean };
+  const fallback = [...items].sort(
     (a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes,
   )[0];
+  return { row: fallback, kind: "mae", value: fallback.maeMean };
 }
 
 function sortRows(
