@@ -86,7 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BATCH_SIZE,
         help=(
             f"Maximum files to materialise per tick (default: {DEFAULT_BATCH_SIZE}). "
-            "Each file is decoded sequentially within a tick."
+            "Each file is decoded sequentially within a tick. "
+            "Bump significantly (e.g. --batch-size 200) for one-shot historical "
+            "backfills via --once; the default is sized for live-polling cadence."
         ),
     )
     parser.add_argument(
@@ -184,6 +186,17 @@ async def _drive(
         # `--once` is a cron-friendly single tick; subscriptions don't make
         # sense here (they'd never be drained before the process exits).
         await tick()
+        # Helpful nudge for the historical-backfill workflow: if the tick
+        # processed exactly one full batch, there are probably more files
+        # waiting and the operator just expected one --once to drain them.
+        # Cheaper than re-querying the catalog: ask whether any files are
+        # still unmaterialised and surface a hint.
+        await _hint_if_more_pending(
+            db=db,
+            product=args.product,
+            level=args.level,
+            batch_size=args.batch_size,
+        )
         return
 
     loop = IntervalLoop(tick=tick, interval_s=args.interval, name=LOOP_NAME)
@@ -218,6 +231,66 @@ async def _drive(
             with suppress(asyncio.CancelledError):
                 await consumer_task
         await loop.stop()
+
+
+async def _hint_if_more_pending(
+    *,
+    db: Database,
+    product: str,
+    level: str,
+    batch_size: int,
+) -> None:
+    """Probe whether `--once` left unmaterialised files behind and nudge the operator.
+
+    The default batch size (8) is sized for the live-polling cadence
+    where new files arrive ~every 2 minutes. For one-shot historical
+    backfills, that batch is far too small — the operator runs `--once`
+    expecting "drain the queue" and gets "process 8 files". This hint
+    converts that footgun into a one-line nudge with the exact command
+    to drain the rest in a single tick.
+
+    Cheap: one indexed COUNT against `mrms_files` LEFT JOIN `mrms_grids`.
+    Silently does nothing if the queue is now empty or the count fails
+    (the materialise tick already succeeded; the hint is best-effort).
+    """
+    from sqlalchemy import func, select
+
+    from aeroza.ingest.mrms_grids_models import MrmsGridRow
+    from aeroza.ingest.mrms_models import MrmsFileRow
+
+    try:
+        async with db.sessionmaker() as session:
+            # OUTER JOIN on file_key (the grid table's PK), then filter
+            # to rows whose join side came back NULL — i.e. unmaterialised.
+            stmt = (
+                select(func.count())
+                .select_from(MrmsFileRow)
+                .outerjoin(MrmsGridRow, MrmsGridRow.file_key == MrmsFileRow.key)
+                .where(
+                    MrmsFileRow.product == product,
+                    MrmsFileRow.level == level,
+                    MrmsGridRow.file_key.is_(None),
+                )
+            )
+            pending = (await session.execute(stmt)).scalar_one()
+    except Exception:
+        return  # best-effort; never let the hint surface its own error
+
+    if pending <= 0:
+        return
+    suggested = max(pending + 16, batch_size * 4)
+    log.info(
+        "materialise_mrms.once.pending",
+        pending=int(pending),
+        batch_size=batch_size,
+        hint=f"--batch-size {suggested}",
+    )
+    print(
+        f"\n[materialise-mrms] {pending} more file(s) waiting to be "
+        f"materialised. Re-run with --batch-size {suggested} to drain "
+        f"the queue in one tick.\n",
+        file=sys.stderr,
+    )
 
 
 def _install_signal_handlers(stopper: asyncio.Event) -> None:

@@ -652,10 +652,12 @@ function EventEmptyState({
       </div>
       <p className="text-sm leading-relaxed text-muted">
         Then materialise the GRIB2 → Zarr (this is what powers the radar
-        tiles):
+        tiles). The default batch size is 8 — bump it so a single{" "}
+        <code className="font-mono text-text">--once</code> tick processes
+        the whole event window:
       </p>
       <code className="select-all w-full overflow-x-auto rounded-md border border-border/60 bg-bg/40 px-3 py-2 text-left font-mono text-[11px] text-text">
-        aeroza-materialise-mrms --once
+        aeroza-materialise-mrms --once --batch-size 200
       </code>
       <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-left text-[11px] leading-relaxed text-muted">
         <strong className="font-semibold text-warning">Heads up.</strong>{" "}
@@ -666,11 +668,18 @@ function EventEmptyState({
         the <code className="font-mono text-text">[grib]</code> extra yet:
         <pre className="mt-1.5 select-all overflow-x-auto rounded border border-border/60 bg-bg/40 p-2 font-mono text-[11px] text-text">
 {`# macOS
-brew install eccodes && uv sync --extra grib
+brew install eccodes && make extras-grib
 
 # Linux
-sudo apt-get install -y libeccodes-dev && uv sync --extra grib`}
+sudo apt-get install -y libeccodes-dev && make extras-grib`}
         </pre>
+        <p className="mt-1.5 text-muted/80">
+          <code className="font-mono text-text">make extras-grib</code> wraps
+          the right <code className="font-mono">uv sync</code> incantation —
+          a plain <code className="font-mono">uv sync --extra grib</code>{" "}
+          would replace your installed extra-set and break the rest of the
+          stack.
+        </p>
       </div>
       <p className="text-[11px] text-muted/80">
         On a typical home connection the seed takes about a minute per
