@@ -117,6 +117,13 @@ interface AlertsMapProps {
    */
   showRadar?: boolean;
   /**
+   * Pin the radar layer to a specific MRMS grid by its source file key.
+   * When set, the tile URL gets `?fileKey=...` appended and the cache-bust
+   * refresh tick is suppressed (the radar is no longer "live"). Used by
+   * /demo to scrub the radar through historical grids.
+   */
+  radarFileKey?: string | null;
+  /**
    * Hide the in-map severity / dBZ legend overlay. Used by the landing-page
    * hero embed where the legend sits in a sibling panel and would otherwise
    * crowd the smaller viewport.
@@ -151,6 +158,7 @@ export function AlertsMap({
   initialBounds,
   displayedAt,
   showRadar = true,
+  radarFileKey = null,
   hideLegend = false,
   onLoaded,
 }: AlertsMapProps) {
@@ -197,10 +205,12 @@ export function AlertsMap({
       // Radar source/layer — sits below alert polygons so a severe-storm
       // alert always paints on top of the reflectivity blob it covers.
       // Cache-bust query (`?_=ts`) is what we mutate on the refresh tick
-      // to fetch fresher tiles without recreating the source.
+      // to fetch fresher tiles without recreating the source. When
+      // `radarFileKey` is set, we pin to a specific historical grid via
+      // the `fileKey` query param and the refresh tick becomes a no-op.
       map.addSource(RADAR_SOURCE_ID, {
         type: "raster",
-        tiles: [`${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?_=${Date.now()}`],
+        tiles: [buildRadarTileUrl(radarFileKey)],
         tileSize: 256,
         attribution: "MRMS · NOAA / NSSL",
       });
@@ -408,28 +418,39 @@ export function AlertsMap({
     );
   }, [ready, showRadar]);
 
-  // Periodically swap the radar tile URL with a new cache-buster so
-  // MapLibre re-fetches and the user sees the latest grid land.
+  // Radar tile URL management.
+  //
+  // - "Live" mode (radarFileKey === null): periodically swap the tile URL
+  //   with a fresh cache-buster so MapLibre re-fetches and the user sees
+  //   newer grids land as they materialise.
+  // - "Pinned" mode (radarFileKey set): swap the tile URL whenever the
+  //   prop changes. Used by /demo's autoplay scrubber to step the radar
+  //   through historical grids one fileKey at a time. No interval timer
+  //   in this mode — a refresh would just re-fetch the same image.
   useEffect(() => {
     if (!ready || !showRadar) return;
-    const refresh = () => {
+    const swap = () => {
       const map = mapRef.current;
       if (!map) return;
       const source = map.getSource(RADAR_SOURCE_ID);
       if (!source) return;
-      const url = `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?_=${Date.now()}`;
       // setTiles() is the documented way to swap a raster source's URL
       // template without losing the layer's place in the stack.
       // Casting via unknown — MapLibre's runtime exposes setTiles on
       // raster sources but the static .d.ts types it as part of an
       // internal interface only.
       (source as unknown as { setTiles?: (tiles: string[]) => void }).setTiles?.(
-        [url],
+        [buildRadarTileUrl(radarFileKey)],
       );
     };
-    const id = setInterval(refresh, RADAR_REFRESH_INTERVAL_MS);
+    swap();
+    if (radarFileKey !== null) {
+      // Pinned: nothing to refresh; swap once and stop.
+      return;
+    }
+    const id = setInterval(swap, RADAR_REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [ready, showRadar]);
+  }, [ready, showRadar, radarFileKey]);
 
   function applyToSource(
     collection: AlertFeatureCollection,
@@ -609,4 +630,23 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
       <dd className="text-text">{value ?? "—"}</dd>
     </>
   );
+}
+
+/**
+ * Build the radar tile URL template for the MapLibre raster source.
+ *
+ * Live mode (no fileKey): cache-busts on every call so MapLibre re-fetches
+ * tiles when we swap the URL — surfacing freshly-materialised grids.
+ *
+ * Pinned mode (fileKey set): asks the server for the specific grid's
+ * tiles. The fileKey is encoded with `encodeURIComponent` because real
+ * MRMS keys carry slashes (`CONUS/.../MergedReflectivityComposite_...`)
+ * and the route's query parser treats them as opaque.
+ */
+function buildRadarTileUrl(fileKey: string | null): string {
+  const base = `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png`;
+  if (fileKey === null) {
+    return `${base}?_=${Date.now()}`;
+  }
+  return `${base}?fileKey=${encodeURIComponent(fileKey)}`;
 }
