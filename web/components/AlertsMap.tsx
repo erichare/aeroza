@@ -68,10 +68,10 @@ const SEVERITY_FILL_COLOR: Record<Severity, string> = {
 };
 
 // CARTO's basemap raster tiles — free, attribution-required. The
-// `voyager_nolabels` variant is a soft cream/grey base that matches the
-// parchment theme. MapLibre doesn't interpolate Leaflet-style `{a-c}`
-// subdomain placeholders, so we list the three explicitly and let it
-// round-robin.
+// `voyager_nolabels` variant is a desaturated cool-grey base that pairs
+// with the Meridian palette without competing with the radar overlay.
+// MapLibre doesn't interpolate Leaflet-style `{a-c}` subdomain
+// placeholders, so we list the three explicitly and let it round-robin.
 const CARTO_SUBDOMAINS = ["a", "b", "c"] as const;
 const cartoTiles = (style: string): string[] =>
   CARTO_SUBDOMAINS.map(

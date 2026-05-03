@@ -14,10 +14,11 @@ export default function DocsIndexPage() {
     <DocsLayout>
       <h1>Aeroza docs</h1>
       <p>
-        Aeroza is an API-first weather-intelligence platform: streaming alerts,
-        materialised radar grids, and queryable predictive nowcasts. This is
-        the developer documentation — narrow on purpose, focused on the things
-        you actually need to build against the running API.
+        Aeroza is an API-first weather-intelligence platform: streaming NWS
+        alerts, materialised MRMS radar grids, surface METAR observations,
+        queryable predictive nowcasts, and categorical verification metrics.
+        This is the developer documentation — narrow on purpose, focused on
+        the things you actually need to build against the running API.
       </p>
 
       <h2>Where to go next</h2>
@@ -28,12 +29,19 @@ export default function DocsIndexPage() {
         </li>
         <li>
           <Link href="/docs/concepts">Concepts</Link> — the data model behind
-          alerts, MRMS files / grids, point sample, and polygon reduction.
+          alerts, MRMS files / grids, METAR observations, point sample, and
+          polygon reduction.
         </li>
         <li>
           <Link href="/docs/api">API reference</Link> — every public route,
           plus a link to the auto-generated Swagger UI for interactive
           requests.
+        </li>
+        <li>
+          <Link href="/demo">Storm Replay</Link> — narrated walkthroughs of
+          curated historical events (April 27 2011 outbreak, etc.) showing
+          alerts and radar evolving together. Best way to see the data model
+          in motion before wiring up your own client.
         </li>
       </ul>
 

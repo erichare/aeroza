@@ -6,9 +6,9 @@ Aeroza turns weather into a queryable, streaming API. Real-time radar, predictiv
 
 ## Status
 
-**Phases 0–5 + pySTEPS shipped.** The platform has live ingest (NWS alerts, MRMS reflectivity), queryable point/polygon/tile reads, **two** nowcasting algorithms (persistence baseline + pySTEPS Lucas–Kanade + semi-Lagrangian extrapolation), continuous verification with a public calibration dashboard, signed webhook delivery with an alert-rule DSL, a `@aeroza/sdk` TypeScript client, and a polished web surface (`/`, `/map`, `/calibration`, `/console`, `/docs`).
+**Phases 0–6d shipped.** Live ingest (NWS alerts, MRMS reflectivity, METAR), queryable point/polygon/tile reads, two nowcasting algorithms (persistence baseline + pySTEPS Lucas–Kanade), continuous verification with both continuous (MAE/bias/RMSE) and categorical (POD/FAR/CSI) skill scores, signed webhook delivery with a point/polygon alert-rule DSL, opt-in bearer-token auth (`aza_live_*` keys) with a `GET /v1/me` introspection route, and a polished web surface across six routes — landing (`/`), interactive `/map`, `/demo` Storm Replay (autoplay through the live archive or four hand-curated historical events with commentary), `/calibration` matrix + sparklines, dev `/console`, and `/docs`. The `@aeroza/sdk` TypeScript client (16 typed methods) is what the dev console drives every panel through.
 
-What's next: ensemble forecasting (Brier / CRPS), auth + API keys, and additional ingest sources (NEXRAD L2, HRRR / NBM model data, METAR). See [docs/ROADMAP.md](docs/ROADMAP.md).
+What's next: ensemble forecasting (Brier / CRPS), per-key rate limiting, and additional ingest sources (NEXRAD L2, HRRR / NBM model data). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quickstart (development)
 

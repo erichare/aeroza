@@ -2,38 +2,60 @@
 
 Routes here are URL-versioned (``/v1/...``). The current surface:
 
-- ``GET /v1/alerts`` — active NWS alerts as a GeoJSON ``FeatureCollection``,
+**Alerts (NWS):**
+
+- ``GET /v1/alerts`` — active alerts as a GeoJSON ``FeatureCollection``,
   filterable by a single ``point``, a ``bbox``, and/or a minimum ``severity``.
 - ``GET /v1/alerts/stream`` — Server-Sent Events feed re-emitting newly
   observed alerts published by the ingest worker on the ``aeroza.alerts.nws.new``
   NATS subject.
 - ``GET /v1/alerts/{alert_id}`` — single-alert detail with the long-form
-  ``description`` and ``instruction`` fields that the list endpoint omits.
-- ``GET /v1/mrms/files`` — MRMS catalog ("what data is available right
-  now") populated by the ``aeroza-ingest-mrms`` worker.
-- ``GET /v1/mrms/grids`` — materialised-grid catalog ("what data is
-  decoded and queryable right now") populated by the
-  ``aeroza-materialise-mrms`` worker.
-- ``GET /v1/mrms/grids/sample`` — point sample (``lat``, ``lng``) against
-  the latest matching grid (or one ``at_time`` in the past). The first
-  read-side primitive over the materialised grids — turns the catalog
-  from "what is available" into "what is the value here, right now".
-- ``GET /v1/mrms/grids/polygon`` — reduce one grid over the cells inside
-  a ``polygon`` (``max`` / ``mean`` / ``min`` / ``count_ge``). Building
-  block for "is anything intense enough inside this region right now?"
-  alerting / geofencing.
+  ``description`` and ``instruction`` fields the list endpoint omits.
+
+**MRMS (radar):**
+
+- ``GET /v1/mrms/files`` — file catalog ("what data is available right now"),
+  populated by ``aeroza-ingest-mrms``.
+- ``GET /v1/mrms/grids`` — materialised-grid catalog ("what data is decoded
+  and queryable right now"), populated by ``aeroza-materialise-mrms``.
+- ``GET /v1/mrms/grids/sample`` — nearest-cell value at a (``lat``, ``lng``)
+  against the latest matching grid (or one ``at_time`` in the past). Turns
+  the catalog from "what is available" into "what is the value here, now".
+- ``GET /v1/mrms/grids/polygon`` — reduce one grid over the cells inside a
+  ``polygon`` (``max`` / ``mean`` / ``min`` / ``count_ge``). Building block
+  for "is anything intense enough inside this region right now?" geofencing.
 - ``GET /v1/mrms/grids/{file_key}`` — single-grid detail by S3 key.
-- ``GET /v1/nowcasts`` — predicted-grid catalog populated by the
-  ``aeroza-nowcast-mrms`` worker. Each row is one (algorithm, horizon)
-  forecast derived from an observation grid.
-- ``GET /v1/calibration`` — aggregate verification metrics (MAE / bias
-  / RMSE) over a time window, grouped by algorithm × horizon. The
-  public face of the §3.3 moat.
+- ``GET /v1/mrms/tiles/{z}/{x}/{y}.png`` — Web-Mercator XYZ raster tiles
+  rendered server-side from the latest grid (or one pinned via ``fileKey``);
+  bilinear sampling at z>=4, NWS dBZ ramp, transparent fallback. Drop-in for
+  MapLibre / Leaflet.
+
+**METAR (surface stations):**
+
+- ``GET /v1/metar`` — recent observations, filterable by ``station`` (ICAO),
+  ``since`` / ``until``, ``bbox``, and ``limit``. Newest first.
+- ``GET /v1/metar/{station_id}/latest`` — most-recent observation for one
+  ICAO station. Case-insensitive on the path.
+
+**Nowcasts + verification:**
+
+- ``GET /v1/nowcasts`` — predicted-grid catalog (algorithm × horizon ×
+  valid_at), populated by ``aeroza-nowcast-mrms``.
+- ``GET /v1/calibration`` — aggregate verification per
+  ``(algorithm, forecastHorizonMinutes)`` over a window: sample-weighted MAE
+  / bias / RMSE plus categorical POD / FAR / CSI from the summed contingency
+  table. The public face of the §3.3 moat.
 - ``GET /v1/calibration/series`` — same metrics, time-bucketed so the
-  front-end can chart MAE / bias / RMSE evolution per algorithm.
-- ``GET /v1/stats`` — compact health-style snapshot of how much data the
-  system currently knows about (alerts active/total, MRMS files,
-  materialised grids, and freshness watermarks).
+  front-end can chart accuracy evolution per algorithm.
+
+**System:**
+
+- ``GET /v1/stats`` — compact freshness snapshot (alerts active/total, MRMS
+  files / grids, latest valid_at and materialised_at watermarks).
+
+Auth surface (``GET /v1/me``) lives in :mod:`aeroza.auth.routes`. Webhook +
+alert-rule CRUD live in :mod:`aeroza.webhooks.routes` and
+:mod:`aeroza.webhooks.rule_routes`.
 
 Route registration order matters: ``/alerts/stream`` is registered before
 ``/alerts/{alert_id}`` so the literal path wins over the path-parameter
