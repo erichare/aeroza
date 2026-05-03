@@ -12,7 +12,14 @@
  *
  * Adding an event:
  * 1. Pick a real, verifiable, dramatic event with a recognisable name.
- * 2. Bracket its peak with start/end (UTC); 4–6 hours plays well.
+ *    Severe convection (tornado outbreaks, derechos), winter cyclones
+ *    (blizzards, ice storms), and tropical systems (hurricanes,
+ *    landfalling TS) all read well — MRMS reflectivity composites
+ *    show winter precipitation bands and tropical rainshields too,
+ *    not just summer convective cores.
+ * 2. Bracket its peak with start/end (UTC); 4–6 hours plays well for
+ *    convective events, 12–24 hours for slower-evolving winter
+ *    cyclones.
  * 3. Bbox should frame the action, not the whole CONUS — tighter is
  *    more dramatic.
  * 4. Commentary should explain *what made it noteworthy*, not just
@@ -79,6 +86,27 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     },
   },
   {
+    id: "midwest-blizzard-2024",
+    name: "Mid-January Plains Blizzard",
+    date: "January 12–13, 2024",
+    location: "Plains & Upper Midwest",
+    startUtc: "2024-01-12T18:00:00Z",
+    endUtc: "2024-01-13T18:00:00Z",
+    bbox: [-100.0, 38.5, -86.0, 46.0],
+    replayable: true,
+    summary:
+      "A fast-moving cyclone dragged Arctic air across the Plains on NFL Wild Card weekend; wind chills hit -50°F and the storm-related death toll exceeded 80.",
+    commentary: [
+      "On January 12–13, 2024 a low-pressure system intensified rapidly across the central US, dragging Arctic air south behind it. Blizzard Warnings covered most of Iowa, Nebraska, and surrounding states. Wind chills plunged to -50°F across the northern Plains. The storm forced the NFL to postpone the Buffalo–Pittsburgh playoff game by a day — a rare logistical surrender. National death toll attributed to the storm and the Arctic air mass that followed: 80+ across multiple states.",
+      "What you'll see in the replay: a classic comma-shaped precipitation field with the dry slot wrapping in from the southwest. The northwestern half is snow with embedded heavier bands; the southeastern flank shows lift on the warm side that produced ice-storm conditions across parts of Tennessee. MRMS reflectivity reads snow at lower dBZ values than rain — the greens here are intense snowfall rates, not light drizzle.",
+      "Notable: wind chills, not snowfall totals, were the deadliest hazard. The storm itself was a textbook mid-latitude cyclone; what made it lethal was the Arctic air mass it pulled south once the precipitation ended. NWS messaging shifted mid-event from 'be prepared to travel after the storm' to 'do not expose any skin' — a useful case study in cascading hazards.",
+    ],
+    reference: {
+      label: "NWS Des Moines event summary",
+      url: "https://www.weather.gov/dmx/January_12_13_2024_Blizzard",
+    },
+  },
+  {
     id: "rolling-fork-tornado-2023",
     name: "Rolling Fork Outbreak",
     date: "March 24–25, 2023",
@@ -100,6 +128,27 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     },
   },
   {
+    id: "buffalo-blizzard-2022",
+    name: "Buffalo Christmas Blizzard",
+    date: "December 23–25, 2022",
+    location: "Western New York",
+    startUtc: "2022-12-23T12:00:00Z",
+    endUtc: "2022-12-24T18:00:00Z",
+    bbox: [-80.0, 42.0, -77.0, 44.0],
+    replayable: true,
+    summary:
+      "A 967-mb bomb cyclone whipped lake-effect snow into a multi-day blizzard that buried Buffalo under 50+ inches and killed 47 in Erie County alone.",
+    commentary: [
+      "Late on December 23, 2022, an exceptionally deep extratropical cyclone (central pressure ≈967 mb — a textbook 'bomb cyclone') combined with an Arctic air mass to deliver a multi-day lake-effect blizzard to Western New York. Buffalo recorded over 50 inches of snow with sustained winds of 65+ mph and visibility near zero for more than 36 hours. The storm killed 47 people in Erie County (many trapped in cars or homes that lost heat) and contributed to over 100 deaths nationwide.",
+      "What you'll see in the replay: long, organised lake-effect snow bands extending east-southeast off Lake Erie across WNY. The bands' intensity (greens / yellows on the dBZ ramp here represent very heavy snow rates, not rain) and persistence are the signatures of a fully-tapped lake-effect setup. Watch the eastern terminus of the band — that's where Buffalo sat for ~36 hours while the band refused to migrate.",
+      "Notable: lake-effect snow is hard to forecast precisely because the band's exact position depends on wind direction within a few degrees. NWS Buffalo nailed the macro forecast (a major lake-effect event) days in advance; the operational challenge was convincing the public that *this* lake-effect event was different — fatal — instead of the usual seasonal nuisance.",
+    ],
+    reference: {
+      label: "NWS Buffalo storm summary",
+      url: "https://www.weather.gov/buf/Blizzard122322",
+    },
+  },
+  {
     id: "mayfield-quad-state-2021",
     name: "Mayfield Quad-State Tornado",
     date: "December 10–11, 2021",
@@ -118,6 +167,27 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     reference: {
       label: "NWS Paducah event page",
       url: "https://www.weather.gov/pah/December-10th-11th-2021-Tornado",
+    },
+  },
+  {
+    id: "winter-storm-uri-2021",
+    name: "Winter Storm Uri",
+    date: "February 13–17, 2021",
+    location: "Texas & Southern Plains",
+    startUtc: "2021-02-15T00:00:00Z",
+    endUtc: "2021-02-15T18:00:00Z",
+    bbox: [-103.0, 26.0, -93.0, 36.5],
+    replayable: true,
+    summary:
+      "Arctic air drove temperatures below 0°F across Texas, triggering the cascading ERCOT grid failure. 246 confirmed deaths.",
+    commentary: [
+      "From February 13–17, 2021, an extraordinarily deep cold-air outbreak pushed Arctic temperatures all the way to the Gulf of Mexico. Lows fell below 0°F as far south as San Angelo and Dallas–Fort Worth — territory unaccustomed to such cold and infrastructure-wise unprepared for it. The Texas grid (ERCOT) collapsed in cascading failures starting Feb 15, leaving over 4.5 million customers without power for days during the coldest stretch. The state's official death toll was revised to 246; independent estimates ran substantially higher.",
+      "What you'll see in the replay: a vast precipitation shield draped over Texas and the southern Plains, with dBZ values consistent with mixed snow / sleet / freezing rain — not the towering convective cores you'd expect over Texas. The visual story is breadth, not intensity: the storm's footprint covered 200+ million people.",
+      "Notable: this event is the canonical example of weather-driven infrastructure failure in the modern US. Subsequent ERCOT post-mortems and federal reports made clear that the grid wasn't winterised because the design assumption was 'this kind of cold doesn't happen here.' The forecast was excellent days in advance; the systemic preparation was not.",
+    ],
+    reference: {
+      label: "NWS Fort Worth event page",
+      url: "https://www.weather.gov/fwd/uri",
     },
   },
   {
