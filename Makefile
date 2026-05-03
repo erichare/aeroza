@@ -2,13 +2,20 @@
         lint format format-check typecheck check migrate migrate-down migration db-shell clean \
         web-install web-dev web-build web-typecheck \
         ingest-alerts ingest-mrms ingest-metar materialise-mrms \
-        nowcast-pysteps nowcast-persistence
+        nowcast-pysteps nowcast-persistence \
+        extras-grib extras-nowcast
 
 UV ?= uv
 
 # DSN used by the integration test suite. Override per-environment as needed
 # (e.g. `make test-integration TEST_DATABASE_URL=postgresql+asyncpg://...`).
 TEST_DATABASE_URL ?= postgresql+asyncpg://aeroza:aeroza@localhost:5432/aeroza_test
+
+# Extras that the dev stack needs to boot. Anything outside this set is
+# heavy / system-dep-bearing and stays opt-in via the targets below.
+# `uv sync --extra X` REPLACES the installed extra-set rather than adding
+# to it, so any future "add an extra" target has to re-list these too.
+BOOTSTRAP_EXTRAS = --extra db --extra cache --extra stream --extra ingest --extra verify
 
 help:
 	@awk 'BEGIN {FS = ":.*##"; printf "Aeroza make targets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -43,8 +50,7 @@ bootstrap: doctor ## First-run setup: .env, deps, infra, migrations (idempotent)
 	fi
 	@if ! $(UV) run --quiet python -c "import alembic, fastapi, sqlalchemy, redis, nats" >/dev/null 2>&1; then \
 		printf "Syncing Python deps…\n"; \
-		$(UV) sync --quiet \
-			--extra db --extra cache --extra stream --extra ingest --extra verify; \
+		$(UV) sync --quiet $(BOOTSTRAP_EXTRAS); \
 	fi
 	@if [ ! -f node_modules/.package-lock.json ]; then \
 		printf "Installing web deps…\n"; \
@@ -79,7 +85,31 @@ start: bootstrap ## Boot the whole stack (API + web + workers) in one terminal
 stop: ## Stop the docker compose stack (Postgres, Redis, NATS)
 	@docker compose down
 
-install: ## Sync Python dependencies via uv
+# --- Optional extras ------------------------------------------------------
+# `uv sync --extra X` REPLACES the installed extra-set, not adds to it.
+# Plain `uv sync --extra grib` would silently uninstall db / cache /
+# stream / ingest / verify and leave the stack broken. These targets
+# re-list the bootstrap extras so adding grib (or nowcast) on top of an
+# already-bootstrapped venv stays additive in effect.
+#
+# Both extras need a system library too — handled outside uv:
+#   grib    → eccodes (brew install eccodes / apt-get install -y libeccodes-dev)
+#   nowcast → libomp on macOS (brew install libomp); Linux works out of the box
+
+extras-grib: ## Install the [grib] extra (cfgrib) on top of bootstrap deps
+	@printf "Syncing Python deps with [grib] extra…\n"
+	@$(UV) sync $(BOOTSTRAP_EXTRAS) --extra grib
+	@printf "\033[32mDone.\033[0m The materialiser can now decode GRIB2 → Zarr.\n"
+	@printf "  → Run \033[36maeroza-materialise-mrms --once\033[0m to process queued files.\n"
+
+extras-nowcast: ## Install the [nowcast] extra (pySTEPS) on top of bootstrap deps
+	@printf "Syncing Python deps with [nowcast] extra…\n"
+	@printf "  Note: macOS needs \033[36mbrew install libomp\033[0m first.\n"
+	@$(UV) sync $(BOOTSTRAP_EXTRAS) --extra nowcast
+	@printf "\033[32mDone.\033[0m pySTEPS is available as a forecaster.\n"
+	@printf "  → Run \033[36mmake nowcast-pysteps\033[0m to use it.\n"
+
+install: ## Sync Python dependencies via uv (every extra; needs eccodes + libomp)
 	$(UV) sync --all-extras
 
 dev: ## Run the API with hot reload

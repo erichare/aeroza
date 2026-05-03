@@ -73,36 +73,36 @@ Public surface: 19 routes versioned under `/v1`. The TypeScript SDK in [`sdk-ts/
 
 ## Optional extras
 
-`uv sync --all-extras` skips heavy native dependencies. Two are worth knowing about.
+`make start` installs only the core extras the live stack needs. Two heavy / system-dep-bearing ones stay opt-in.
 
-**`[grib]`** — `cfgrib` for decoding MRMS GRIB2 files:
+> **Why `make extras-*` and not plain `uv sync --extra X`?** `uv sync --extra X` *replaces* the installed extra-set rather than adding to it — running `uv sync --extra grib` on a working stack will silently uninstall db / cache / stream / ingest / verify and break the rest of the platform. The `make extras-*` targets re-list the bootstrap extras so adding one stays additive in effect.
+
+**`[grib]`** — `cfgrib` for decoding MRMS GRIB2 files. Required by `aeroza-materialise-mrms` (the worker fast-fails at startup with an install hint if missing).
 
 ```bash
 # macOS
 brew install eccodes
-uv sync --extra grib
+make extras-grib
 
 # Debian/Ubuntu
 sudo apt-get install -y libeccodes-dev
-uv sync --extra grib
+make extras-grib
 ```
 
-The decode path lazy-loads `cfgrib`, so unit tests stay green without `eccodes` installed; only the actual end-to-end materialisation needs the system library.
-
-**`[nowcast]`** — `pysteps` for the optical-flow nowcaster:
+**`[nowcast]`** — `pysteps` for the optical-flow forecaster. `PystepsForecaster` is opt-in via `aeroza-nowcast-mrms --algorithm pysteps`; without the extra installed the worker keeps running the persistence baseline.
 
 ```bash
 # Linux: pysteps' setup.py just works.
-uv sync --extra nowcast
+make extras-nowcast
 
 # macOS: pysteps' setup.py uses raw -fopenmp, which Apple clang doesn't accept.
 brew install libomp
 CFLAGS="-Xpreprocessor -fopenmp -I$(brew --prefix libomp)/include" \
 LDFLAGS="-L$(brew --prefix libomp)/lib -lomp" \
-uv sync --extra nowcast
+make extras-nowcast
 ```
 
-`PystepsForecaster` is opt-in via `aeroza-nowcast-mrms --algorithm pysteps`; without the extra installed the worker keeps running the persistence baseline.
+For both extras together (or to install everything including the heavy bits), `make install` runs `uv sync --all-extras` — fine when you have eccodes + libomp already in place.
 
 ## License
 
