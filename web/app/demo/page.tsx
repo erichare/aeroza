@@ -571,33 +571,7 @@ function EmptyState({
   gridCount: number;
 }) {
   if (mode.kind === "event") {
-    const event = mode.event;
-    return (
-      <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-3 px-6 text-center">
-        <h2 className="font-display text-lg font-semibold text-text">
-          No grids ingested for this event yet.
-        </h2>
-        <p className="text-sm leading-relaxed text-muted">
-          Your local archive has{" "}
-          <span className="text-text">{gridCount}</span> grid
-          {gridCount === 1 ? "" : "s"} in the {event.name} window
-          ({formatDateTime(new Date(event.startUtc))} →{" "}
-          {formatDateTime(new Date(event.endUtc))}).
-        </p>
-        <p className="text-sm leading-relaxed text-muted">
-          MRMS keeps roughly 24h of grids in NOAA's real-time bucket;
-          historical events need to be pulled from the NCEI archive. A{" "}
-          <code className="font-mono text-text">aeroza-ingest-mrms</code>{" "}
-          extension that reads from the archive isn't shipped yet.
-        </p>
-        <Link
-          href="/map"
-          className="rounded-md border border-accent bg-accent/15 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-accent hover:bg-accent/25"
-        >
-          Try the live map →
-        </Link>
-      </div>
-    );
+    return <EventEmptyState event={mode.event} gridCount={gridCount} />;
   }
   return (
     <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center gap-3 px-6 text-center">
@@ -619,6 +593,86 @@ function EmptyState({
         Open live map →
       </Link>
     </div>
+  );
+}
+
+function EventEmptyState({
+  event,
+  gridCount,
+}: {
+  event: FeaturedEvent;
+  gridCount: number;
+}) {
+  const seedCommand = useMemo(() => buildSeedCommand(event), [event]);
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(seedCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard can be denied (insecure context, sandboxed iframe).
+      // Silently fall through; the user can still triple-click the
+      // <code> block and copy by hand.
+    }
+  }, [seedCommand]);
+  return (
+    <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center gap-4 px-6 text-center">
+      <h2 className="font-display text-lg font-semibold text-text">
+        No grids for this event in your archive.
+      </h2>
+      <p className="text-sm leading-relaxed text-muted">
+        Your local archive has{" "}
+        <span className="text-text">{gridCount}</span> grid
+        {gridCount === 1 ? "" : "s"} in the {event.name} window
+        ({formatDateTime(new Date(event.startUtc))} →{" "}
+        {formatDateTime(new Date(event.endUtc))} UTC).
+      </p>
+      <p className="text-sm leading-relaxed text-muted">
+        MRMS keeps roughly a year of grids in NOAA's Open Data bucket. Pull
+        them with the <code className="font-mono text-text">--at-time</code>{" "}
+        flag on the existing ingest CLI:
+      </p>
+      <div className="flex w-full flex-col gap-2 text-left">
+        <code className="select-all overflow-x-auto rounded-md border border-border/60 bg-bg/40 px-3 py-2 font-mono text-[11px] text-text">
+          {seedCommand}
+        </code>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="rounded-md border border-accent bg-accent/15 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-accent hover:bg-accent/25"
+          >
+            {copied ? "Copied!" : "Copy command"}
+          </button>
+          <span className="font-mono text-[10px] text-muted">
+            Then run <code className="text-text">aeroza-materialise-mrms --once</code>{" "}
+            to decode the GRIB2 → Zarr.
+          </span>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted/80">
+        On a typical home connection this takes about a minute per hour of
+        radar window, plus a few seconds per grid for the materialiser.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Build the one-line `aeroza-ingest-mrms` command that pulls every MRMS
+ * grid in this event's window. The lookback is the full window in
+ * minutes, anchored at the event's end time. Adds a small buffer (5 min)
+ * so the upper edge of the window isn't lost to the listing call's
+ * exclusive boundary.
+ */
+function buildSeedCommand(event: FeaturedEvent): string {
+  const start = new Date(event.startUtc).getTime();
+  const end = new Date(event.endUtc).getTime();
+  const lookbackMinutes = Math.ceil((end - start) / 60_000) + 5;
+  return (
+    `aeroza-ingest-mrms --once --at-time '${event.endUtc}' ` +
+    `--lookback-minutes ${lookbackMinutes}`
   );
 }
 
