@@ -1,10 +1,13 @@
 import Link from "next/link";
 
+import { HeroLiveMap } from "@/components/HeroLiveMap";
+import { HeroVerificationCard } from "@/components/HeroVerificationCard";
+
 const HERO_TAGLINE = "Weather, but queryable.";
 const HERO_SUBHEAD =
-  "Aeroza turns weather into a queryable, streaming API. Real-time radar, " +
-  "predictive nowcasting with calibrated confidence, and geospatial queries " +
-  "— for applications that need to understand and react to weather in real time.";
+  "Real-time radar, predictive nowcasting with calibrated confidence, and " +
+  "geospatial queries — for applications that need to understand and react " +
+  "to weather in real time. Every forecast scored against reality, in public.";
 
 interface Feature {
   title: string;
@@ -52,8 +55,9 @@ const CALLOUTS: ReadonlyArray<{ label: string; href: string; primary?: boolean }
 
 export default function LandingPage() {
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-[1400px] flex-col gap-16 px-6 py-16">
+    <main className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-[1400px] flex-col gap-16 px-6 py-12">
       <Hero />
+      <Pitch />
       <Features />
       <BottomCta />
       <Footer />
@@ -61,19 +65,38 @@ export default function LandingPage() {
   );
 }
 
+/**
+ * The new hero: an embedded live AlertsMap on the left and the
+ * "were-we-right?" calibration card on the right. Together they tell
+ * both halves of the pitch — *real, live data* + *we prove we're right* —
+ * within five seconds of page load, without a single API path being
+ * read. Stacks on small screens; the map drops to 60% / 40% on lg+.
+ */
 function Hero() {
   return (
-    <section className="flex flex-col items-start gap-6">
-      <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
-        Aeroza · v0.1 · in development
-      </span>
-      <h1 className="max-w-3xl font-display text-5xl font-semibold tracking-tight text-text sm:text-6xl">
+    <section className="grid grid-cols-1 gap-5 lg:grid-cols-[3fr_2fr]">
+      <HeroLiveMap />
+      <HeroVerificationCard />
+    </section>
+  );
+}
+
+/**
+ * The text pitch + CTAs. Sits below the live demo so the map has the
+ * first impression; the headline is here for context-setting and SEO.
+ * Pulled out of the old Hero so the live demo can dominate above the
+ * fold.
+ */
+function Pitch() {
+  return (
+    <section className="flex flex-col items-start gap-5">
+      <h1 className="max-w-3xl font-display text-4xl font-semibold tracking-tight text-text sm:text-5xl">
         {HERO_TAGLINE}
       </h1>
-      <p className="max-w-2xl text-base leading-relaxed text-muted sm:text-lg">
+      <p className="max-w-2xl text-base leading-relaxed text-muted">
         {HERO_SUBHEAD}
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-3">
+      <div className="mt-1 flex flex-wrap items-center gap-3">
         {CALLOUTS.map((cta) => (
           <CallToAction key={cta.href} {...cta} />
         ))}
@@ -158,8 +181,8 @@ function BottomCta() {
       <p className="mt-2 max-w-2xl text-sm text-muted">
         The dev console runs every public endpoint against a local FastAPI
         instance backed by NEXRAD CONUS data. Spin it up with{" "}
-        <code className="font-mono text-text">make dev</code> and{" "}
-        <code className="font-mono text-text">npm run dev</code>.
+        <code className="font-mono text-text">make start</code> — one command,
+        one terminal.
       </p>
       <div className="mt-4 flex flex-wrap gap-3">
         <Link
