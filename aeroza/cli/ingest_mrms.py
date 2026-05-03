@@ -81,6 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a single tick and exit (cron-friendly).",
     )
     parser.add_argument(
+        "--at-time",
+        type=_parse_iso_utc,
+        default=None,
+        help=(
+            "Anchor the lookback window at this UTC timestamp instead of "
+            "'now'. Example: '2024-05-17T02:30Z'. When set, the worker "
+            "implicitly runs --once — there's no point scheduling a "
+            "historical backfill. Combine with --lookback-minutes to widen "
+            "the window. Used by /demo's 'seed this event' workflow to "
+            "pull MRMS grids for curated historical events."
+        ),
+    )
+    parser.add_argument(
         "--no-publish",
         action="store_true",
         help=(
@@ -93,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # --at-time pins the worker to a historical window; running on a
+    # schedule against a fixed past anchor would just re-fetch the same
+    # files forever, so we force --once.
+    if args.at_time is not None and not args.once:
+        args.once = True
+        log.info("ingest_mrms.at_time.implies_once", at_time=args.at_time.isoformat())
     settings = get_settings()
     log.info(
         "ingest_mrms.start",
@@ -101,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         product=args.product,
         level=args.level,
         once=args.once,
+        at_time=args.at_time.isoformat() if args.at_time is not None else None,
         publish=not args.no_publish,
         env=settings.env,
     )
@@ -163,16 +183,19 @@ def _build_fetcher(args: argparse.Namespace):  # type: ignore[no-untyped-def]
     s3_client = open_data_s3_client()
 
     async def fetcher() -> tuple[MrmsFile, ...]:
-        now = datetime.now(UTC)
-        since = now - timedelta(minutes=args.lookback_minutes)
+        # Live mode anchors at "now" each call so the window slides forward
+        # across ticks. Historical mode (--at-time) anchors at the supplied
+        # timestamp so the worker pulls a fixed, reproducible window.
+        anchor = args.at_time if args.at_time is not None else datetime.now(UTC)
+        since = anchor - timedelta(minutes=args.lookback_minutes)
         files: list[MrmsFile] = []
-        for day in _unique_utc_days(since, now):
+        for day in _unique_utc_days(since, anchor):
             chunk = await list_mrms_files(
                 product=args.product,
                 level=args.level,
                 day=day,
                 since=since,
-                until=now,
+                until=anchor,
                 s3_client=s3_client,
             )
             files.extend(chunk)
@@ -202,6 +225,28 @@ def _install_signal_handlers(stopper: asyncio.Event) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         with suppress(NotImplementedError):
             asyncio_loop.add_signal_handler(sig, stopper.set)
+
+
+def _parse_iso_utc(raw: str) -> datetime:
+    """argparse type-converter for the --at-time flag.
+
+    Accepts the relaxed ISO-8601 forms common in shell usage:
+    "2024-05-17T02:30Z", "2024-05-17T02:30:00Z",
+    "2024-05-17T02:30:00+00:00". Naive timestamps (no tz) are
+    interpreted as UTC — saves the operator from having to type
+    "+00:00" on a flag they're already in the middle of escaping.
+    """
+    # Python's fromisoformat predates "Z" support in older 3.10; "Z" =
+    # "+00:00" everywhere it's accepted.
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        msg = f"--at-time must be ISO-8601 (e.g. '2024-05-17T02:30Z'); got {raw!r}"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 if __name__ == "__main__":  # pragma: no cover - module-as-script entry
