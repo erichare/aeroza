@@ -2,8 +2,8 @@
         lint format format-check typecheck check migrate migrate-down migration db-shell clean \
         web-install web-dev web-build web-typecheck \
         ingest-alerts ingest-mrms ingest-metar materialise-mrms \
-        nowcast-pysteps nowcast-persistence \
-        extras-grib extras-nowcast
+        nowcast-pysteps nowcast-persistence nowcast-lagged-ensemble \
+        seed extras-grib extras-nowcast
 
 UV ?= uv
 
@@ -79,8 +79,10 @@ start: bootstrap ## Boot the whole stack (API + web + workers) in one terminal
 			exit 1; \
 		fi; \
 	done
-	@printf "\nStarting Aeroza dev stack — Ctrl+C stops everything.\n\n"
-	@$(UV) run honcho -f Procfile.dev start
+	@./scripts/start-stack.sh
+
+seed: ## Backfill ~3h of historical MRMS data so the dashboard isn't empty (idempotent)
+	@./scripts/seed-historical.sh
 
 stop: ## Stop the docker compose stack (Postgres, Redis, NATS)
 	@docker compose down
@@ -132,6 +134,9 @@ nowcast-pysteps: ## Long-running nowcaster using pySTEPS (needs --extra nowcast)
 
 nowcast-persistence: ## Long-running nowcaster using the persistence baseline
 	$(UV) run aeroza-nowcast-mrms --algorithm persistence
+
+nowcast-lagged-ensemble: ## Long-running nowcaster using the lagged-ensemble forecaster (no extras needed)
+	$(UV) run aeroza-nowcast-mrms --algorithm lagged-ensemble
 
 up: ## Start dev infrastructure (Postgres, Redis, NATS)
 	docker compose up -d
