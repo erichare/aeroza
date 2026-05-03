@@ -124,6 +124,16 @@ interface AlertsMapProps {
    */
   radarFileKey?: string | null;
   /**
+   * Optional pre-warm hint: the next radar fileKey the caller is about
+   * to swap to. When set, the map fires off ``new Image()`` requests
+   * for every visible tile under that key while the *current* frame
+   * is still on screen — by the time the loop advances, MapLibre's
+   * cache holds the bytes and the swap is instant. Pinned tiles are
+   * forever-immutable on the server (``Cache-Control: immutable``),
+   * so the prefetch is a one-time cost per (fileKey, viewport).
+   */
+  prefetchNextFileKey?: string | null;
+  /**
    * Hide the in-map severity / dBZ legend overlay. Used by the landing-page
    * hero embed where the legend sits in a sibling panel and would otherwise
    * crowd the smaller viewport.
@@ -159,6 +169,7 @@ export function AlertsMap({
   displayedAt,
   showRadar = true,
   radarFileKey = null,
+  prefetchNextFileKey = null,
   hideLegend = false,
   onLoaded,
 }: AlertsMapProps) {
@@ -461,6 +472,44 @@ export function AlertsMap({
     return () => clearInterval(id);
   }, [ready, showRadar, radarFileKey]);
 
+  // Prefetch the next loop frame's tiles into the browser cache so the
+  // swap to that frame doesn't trigger a network round-trip. Pinned
+  // tiles are forever-immutable on the server (Cache-Control:
+  // immutable + a server-side LRU), so each (fileKey, viewport) only
+  // gets prefetched once. We deliberately do this in an effect keyed
+  // on ``prefetchNextFileKey`` rather than inside the swap loop —
+  // separating "show this frame" from "warm the next" keeps either
+  // path debuggable in isolation.
+  useEffect(() => {
+    if (!ready || !showRadar) return;
+    if (!prefetchNextFileKey) return;
+    if (prefetchNextFileKey === radarFileKey) return; // already on screen
+    const map = mapRef.current;
+    if (!map) return;
+    const tiles = visibleTileCoords(map);
+    if (tiles.length === 0) return;
+    const urlTemplate = buildRadarTileUrl(prefetchNextFileKey);
+    // Track Image refs locally so cleanup can null their .src — that
+    // cancels in-flight fetches in modern browsers (per HTML spec) and
+    // lets the ones that already finished get GC'd.
+    const requested: HTMLImageElement[] = [];
+    for (const { z, x, y } of tiles) {
+      const url = urlTemplate
+        .replace("{z}", String(z))
+        .replace("{x}", String(x))
+        .replace("{y}", String(y));
+      const img = new Image();
+      img.decoding = "async";
+      img.src = url;
+      requested.push(img);
+    }
+    return () => {
+      // Aborts any still-loading prefetches when the loop advances or
+      // the user pauses. Browser cache keeps already-fetched tiles.
+      for (const img of requested) img.src = "";
+    };
+  }, [ready, showRadar, prefetchNextFileKey, radarFileKey]);
+
   function applyToSource(
     collection: AlertFeatureCollection,
     asOf: Date | null,
@@ -675,4 +724,59 @@ function buildRadarTileUrl(fileKey: string | null): string {
     return `${base}?_=${Date.now()}`;
   }
   return `${base}?fileKey=${encodeURIComponent(fileKey)}`;
+}
+
+interface TileCoord {
+  z: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Compute the slippy-tile coords currently inside the map's viewport.
+ *
+ * Standard XYZ tile math: ``2^z`` total tiles per axis at zoom ``z``;
+ * x is uniform in longitude, y is the Mercator latitude formula.
+ * MapLibre's ``getZoom()`` returns a fractional zoom — we round to
+ * the integer level the tile pyramid actually serves, which is what
+ * the visible raster source consumes.
+ *
+ * The bounds intersect is conservative — for tiles partially in
+ * view we still prefetch them so a tiny pan during the loop doesn't
+ * flash an unprefetched edge.
+ */
+function visibleTileCoords(map: MapLibreMap): TileCoord[] {
+  const z = Math.round(map.getZoom());
+  if (z < 0) return [];
+  const bounds = map.getBounds();
+  const n = 1 << z;
+
+  const lonToX = (lon: number): number =>
+    Math.floor(((lon + 180) / 360) * n);
+  const latToY = (lat: number): number => {
+    const clamped = Math.max(-85.0511, Math.min(85.0511, lat));
+    const rad = (clamped * Math.PI) / 180;
+    return Math.floor(
+      ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n,
+    );
+  };
+
+  const west = bounds.getWest();
+  const east = bounds.getEast();
+  const south = bounds.getSouth();
+  const north = bounds.getNorth();
+
+  const xMin = Math.max(0, Math.min(n - 1, lonToX(west)));
+  const xMax = Math.max(0, Math.min(n - 1, lonToX(east)));
+  // Mercator y grows southward; north is the smaller index.
+  const yMin = Math.max(0, Math.min(n - 1, latToY(north)));
+  const yMax = Math.max(0, Math.min(n - 1, latToY(south)));
+
+  const coords: TileCoord[] = [];
+  for (let x = xMin; x <= xMax; x += 1) {
+    for (let y = yMin; y <= yMax; y += 1) {
+      coords.push({ z, x, y });
+    }
+  }
+  return coords;
 }

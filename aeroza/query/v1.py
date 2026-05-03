@@ -155,6 +155,7 @@ from aeroza.query.schemas import (
     alert_view_to_feature,
 )
 from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
+from aeroza.tiles.cache import CacheKey, get_default_cache
 from aeroza.tiles.raster import render_tile_png, transparent_tile_png
 from aeroza.verify.schemas import (
     CalibrationResponse,
@@ -439,10 +440,17 @@ async def list_mrms_grids_route(
 # starts oversampling without any data benefit.
 _TILE_MAX_ZOOM: int = 10
 
-# Cache TTL for rendered tiles. Grids refresh every ~2 minutes upstream,
-# so 60 s keeps the map pleasantly fresh while still letting CDNs/browsers
-# coalesce zoom-pan storms.
-_TILE_CACHE_SECONDS: int = 60
+# Cache TTL for *live-mode* tiles (no fileKey query param). Grids
+# refresh every ~2 minutes upstream, so 60 s keeps the map pleasantly
+# fresh while still letting CDNs/browsers coalesce zoom-pan storms.
+_TILE_CACHE_SECONDS_LIVE: int = 60
+
+# Pinned tiles (``?fileKey=…``) are forever-immutable: the bytes for
+# (file_key, z, x, y) are deterministic and the source grid never
+# changes once materialised. Emitting the immutable directive lets
+# browsers and CDNs cache aggressively across the radar replay loop —
+# the second loop iteration becomes a series of 304s / cache hits.
+_TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 
 
 @router.get(
@@ -496,11 +504,14 @@ async def get_mrms_tile_route(
     if grid is None:
         # Return a transparent tile rather than a 404 — the MapLibre
         # raster source aggressively retries 404s, which would spam the
-        # API with tiles outside the materialised grid's coverage.
+        # API with tiles outside the materialised grid's coverage. The
+        # short live-mode TTL applies whether or not the caller passed
+        # a fileKey: even a "missing pinned grid" answer can flip when
+        # the materialiser catches up, so we don't promise immutability.
         return Response(
             content=transparent_tile_png(),
             media_type="image/png",
-            headers={"Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS}"},
+            headers={"Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS_LIVE}"},
         )
 
     n = 1 << z
@@ -510,32 +521,57 @@ async def get_mrms_tile_route(
             detail=f"tile coords out of range for zoom {z} (max x/y = {n - 1})",
         )
 
-    try:
-        png = await asyncio.to_thread(
-            render_tile_png,
-            zarr_uri=grid.zarr_uri,
-            variable=grid.variable,
-            z=z,
-            x=x,
-            y=y,
-        )
-    except KeyError as exc:
-        # Variable not in Zarr → grid in catalog is broken; surface as 502.
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"grid storage missing variable: {exc}",
-        ) from exc
+    # Server-side LRU keyed by (file_key, z, x, y). Only pinned-mode
+    # tiles are eligible — live-mode tiles' "latest grid" target moves
+    # with new ingests and would race the materialiser. Wrapping the
+    # render in the cache covers both first-paint of the radar loop
+    # (other browsers / cold cold caches) and warm reloads.
+    cache = get_default_cache()
+    cache_key = CacheKey(file_key=grid.file_key, z=z, x=x, y=y) if file_key is not None else None
+    cached_png: bytes | None = cache.get(cache_key) if cache_key is not None else None
 
+    if cached_png is not None:
+        png = cached_png
+        cache_status = "hit"
+    else:
+        try:
+            png = await asyncio.to_thread(
+                render_tile_png,
+                zarr_uri=grid.zarr_uri,
+                variable=grid.variable,
+                z=z,
+                x=x,
+                y=y,
+            )
+        except KeyError as exc:
+            # Variable not in Zarr → grid in catalog is broken; surface as 502.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"grid storage missing variable: {exc}",
+            ) from exc
+        if cache_key is not None:
+            cache.put(cache_key, png)
+        cache_status = "miss" if cache_key is not None else "bypass"
+
+    cache_control = (
+        _TILE_CACHE_HEADER_PINNED
+        if file_key is not None
+        else f"public, max-age={_TILE_CACHE_SECONDS_LIVE}"
+    )
     return Response(
         content=png,
         media_type="image/png",
         headers={
-            "Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS}",
+            "Cache-Control": cache_control,
             # Including the source key in headers lets clients (and our
             # smoke tests) verify which grid populated a tile without
             # decoding the PNG.
             "X-Aeroza-Grid-Key": grid.file_key,
             "X-Aeroza-Grid-Valid-At": grid.valid_at.isoformat(),
+            # ``hit`` / ``miss`` for pinned tiles, ``bypass`` for live
+            # mode (cache deliberately skipped). Useful for the
+            # browser devtools-driven sanity check in the radar loop.
+            "X-Aeroza-Tile-Cache": cache_status,
         },
     )
 
