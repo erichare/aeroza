@@ -46,7 +46,7 @@ CI runs the same spec in the `web · Playwright /map smoke` job.
 ## Stack
 
 - Next.js 15 (App Router) + React 19, TypeScript strict.
-- Tailwind CSS with a hand-rolled warm palette (cream parchment + ember accent + cocoa text).
+- Tailwind CSS with a hand-rolled Meridian palette (pale glacier base + prussian-ink text + aged-brass accent).
 - `next/font/google` for Inter (sans), Fraunces (display), JetBrains Mono.
 - MapLibre GL JS for the map surface; raster tiles only — vector MVT is roadmap.
 - Native `EventSource` for SSE, native `fetch` for REST.
