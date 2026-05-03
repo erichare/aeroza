@@ -116,6 +116,12 @@ interface AlertsMapProps {
    * come from `/v1/mrms/tiles/{z}/{x}/{y}.png` (latest grid).
    */
   showRadar?: boolean;
+  /**
+   * Hide the in-map severity / dBZ legend overlay. Used by the landing-page
+   * hero embed where the legend sits in a sibling panel and would otherwise
+   * crowd the smaller viewport.
+   */
+  hideLegend?: boolean;
   onLoaded?: (collection: AlertFeatureCollection) => void;
 }
 
@@ -145,6 +151,7 @@ export function AlertsMap({
   initialBounds,
   displayedAt,
   showRadar = true,
+  hideLegend = false,
   onLoaded,
 }: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -452,7 +459,7 @@ export function AlertsMap({
         ref={containerRef}
         style={{ width: "100%", height: "100%" }}
       />
-      <Legend showRadar={showRadar} />
+      {hideLegend ? null : <Legend showRadar={showRadar} />}
       {error ? (
         <div className="absolute bottom-3 left-3 rounded-md border border-warning/40 bg-bg/85 px-3 py-2 text-xs text-warning shadow-lg backdrop-blur">
           <StatusDot tone="warning" label={error} />
