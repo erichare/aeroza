@@ -4,7 +4,13 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { type MrmsGridItem, fetchMrmsGrids } from "@/lib/api";
+import {
+  ApiError,
+  type MrmsGridItem,
+  fetchMrmsGrids,
+  fetchSeedEventStatus,
+  startSeedEvent,
+} from "@/lib/api";
 import {
   type FeaturedEvent,
   FEATURED_EVENTS,
@@ -172,7 +178,11 @@ export default function DemoPage() {
         ) : loadError !== null ? (
           <ErrorState message={loadError} onRetry={loadGrids} />
         ) : (grids?.length ?? 0) < 2 ? (
-          <EmptyState mode={mode} gridCount={grids?.length ?? 0} />
+          <EmptyState
+            mode={mode}
+            gridCount={grids?.length ?? 0}
+            onSeedComplete={loadGrids}
+          />
         ) : (
           <>
             <AlertsMap
@@ -607,12 +617,20 @@ function ErrorState({
 function EmptyState({
   mode,
   gridCount,
+  onSeedComplete,
 }: {
   mode: Mode;
   gridCount: number;
+  onSeedComplete: () => void;
 }) {
   if (mode.kind === "event") {
-    return <EventEmptyState event={mode.event} gridCount={gridCount} />;
+    return (
+      <EventEmptyState
+        event={mode.event}
+        gridCount={gridCount}
+        onSeedComplete={onSeedComplete}
+      />
+    );
   }
   return (
     <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center gap-3 px-6 text-center">
@@ -637,7 +655,249 @@ function EmptyState({
   );
 }
 
+// How often the seed-progress poller asks the admin endpoint for an
+// updated snapshot. 2.5s is a good balance — fast enough that the
+// counter feels live, slow enough that the network isn't drumming.
+const SEED_POLL_INTERVAL_MS = 2500;
+
+interface SeedProgress {
+  state: "idle" | "starting" | "running" | "succeeded" | "failed";
+  filesInserted: number;
+  filesUpdated: number;
+  gridsMaterialised: number;
+  cfgribAvailable: boolean;
+  error: string | null;
+}
+
+const INITIAL_SEED_PROGRESS: SeedProgress = {
+  state: "idle",
+  filesInserted: 0,
+  filesUpdated: 0,
+  gridsMaterialised: 0,
+  cfgribAvailable: true,
+  error: null,
+};
+
 function EventEmptyState({
+  event,
+  gridCount,
+  onSeedComplete,
+}: {
+  event: FeaturedEvent;
+  gridCount: number;
+  onSeedComplete: () => void;
+}) {
+  // Probe the admin endpoint on mount to decide which UX to show:
+  // - reachable + AEROZA_DEV_ADMIN_ENABLED=true → one-click seed button
+  // - unreachable (404 or network error) → copy-paste fallback (the
+  //   original UX, kept verbatim below).
+  const [adminAvailable, setAdminAvailable] = useState<boolean | null>(null);
+  const [progress, setProgress] = useState<SeedProgress>(INITIAL_SEED_PROGRESS);
+
+  useEffect(() => {
+    let cancelled = false;
+    // We don't have a "ping admin" endpoint, but the status route
+    // 404s for unknown windows when admin is enabled, and 404s for
+    // *every* request when admin is disabled — same status, different
+    // detail. Distinguish via the detail string. Network errors fall
+    // back to "not available" so the copy-paste UX still works
+    // offline.
+    const probe = async () => {
+      try {
+        await fetchSeedEventStatus({
+          since: event.startUtc,
+          until: event.endUtc,
+        });
+        // Existing task → admin definitely enabled. Snapshot below.
+        if (!cancelled) setAdminAvailable(true);
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          // 404 detail "not found" = admin disabled; "no seed task
+          // for that window" = admin enabled, just no task yet.
+          const detail = err.detail ?? "";
+          setAdminAvailable(!detail.includes("not found"));
+        } else {
+          setAdminAvailable(false);
+        }
+      }
+    };
+    void probe();
+    return () => {
+      cancelled = true;
+    };
+  }, [event.startUtc, event.endUtc]);
+
+  // Poll the status endpoint while a seed is in flight. Stops the
+  // moment the server reports a terminal state, then triggers
+  // ``onSeedComplete`` so the parent reloads grids and the replay
+  // takes over.
+  useEffect(() => {
+    if (progress.state !== "running") return;
+    const id = setInterval(async () => {
+      try {
+        const snapshot = await fetchSeedEventStatus({
+          since: event.startUtc,
+          until: event.endUtc,
+        });
+        setProgress({
+          state: snapshot.state,
+          filesInserted: snapshot.filesInserted,
+          filesUpdated: snapshot.filesUpdated,
+          gridsMaterialised: snapshot.gridsMaterialised,
+          cfgribAvailable: snapshot.cfgribAvailable,
+          error: snapshot.error,
+        });
+        if (snapshot.state === "succeeded") {
+          onSeedComplete();
+        }
+      } catch {
+        // Transient poll failure — keep polling; the runner is still
+        // ticking server-side.
+      }
+    }, SEED_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [progress.state, event.startUtc, event.endUtc, onSeedComplete]);
+
+  const handleStart = useCallback(async () => {
+    setProgress({ ...INITIAL_SEED_PROGRESS, state: "starting" });
+    try {
+      const snapshot = await startSeedEvent({
+        since: event.startUtc,
+        until: event.endUtc,
+      });
+      setProgress({
+        state: snapshot.state === "running" ? "running" : snapshot.state,
+        filesInserted: snapshot.filesInserted,
+        filesUpdated: snapshot.filesUpdated,
+        gridsMaterialised: snapshot.gridsMaterialised,
+        cfgribAvailable: snapshot.cfgribAvailable,
+        error: snapshot.error,
+      });
+      if (snapshot.state === "succeeded") {
+        onSeedComplete();
+      }
+    } catch (err) {
+      setProgress({
+        ...INITIAL_SEED_PROGRESS,
+        state: "failed",
+        error:
+          err instanceof Error ? err.message : "Failed to start seed task",
+      });
+    }
+  }, [event.startUtc, event.endUtc, onSeedComplete]);
+
+  if (adminAvailable === null) {
+    // Probing — render a tiny placeholder so the UI doesn't flash
+    // between the two empty-state variants.
+    return (
+      <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-muted">Checking admin endpoint…</p>
+      </div>
+    );
+  }
+
+  if (adminAvailable) {
+    return (
+      <EventSeedPanel
+        event={event}
+        gridCount={gridCount}
+        progress={progress}
+        onStart={handleStart}
+      />
+    );
+  }
+
+  return <EventCopyCommandPanel event={event} gridCount={gridCount} />;
+}
+
+function EventSeedPanel({
+  event,
+  gridCount,
+  progress,
+  onStart,
+}: {
+  event: FeaturedEvent;
+  gridCount: number;
+  progress: SeedProgress;
+  onStart: () => void;
+}) {
+  const isBusy =
+    progress.state === "starting" || progress.state === "running";
+  const totalIngested = progress.filesInserted + progress.filesUpdated;
+  return (
+    <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center gap-4 px-6 text-center">
+      <h2 className="font-display text-lg font-semibold text-text">
+        No grids for this event in your archive.
+      </h2>
+      <p className="text-sm leading-relaxed text-muted">
+        Your local archive has{" "}
+        <span className="text-text">{gridCount}</span> grid
+        {gridCount === 1 ? "" : "s"} in the {event.name} window
+        ({formatDateTime(new Date(event.startUtc))} →{" "}
+        {formatDateTime(new Date(event.endUtc))} UTC).
+      </p>
+      <p className="text-sm leading-relaxed text-muted">
+        Pull them now from NOAA's Open Data bucket — one click runs the
+        full ingest → materialise pipeline server-side. Stays running
+        if you navigate away; come back to this page and the replay
+        will be loaded.
+      </p>
+      <div className="flex w-full flex-col items-center gap-2">
+        <button
+          type="button"
+          onClick={onStart}
+          disabled={isBusy}
+          className={[
+            "rounded-md border px-4 py-2 font-mono text-[12px] uppercase tracking-wide",
+            isBusy
+              ? "cursor-not-allowed border-border/40 bg-bg/40 text-muted/60"
+              : "border-accent bg-accent/15 text-accent hover:bg-accent/25",
+          ].join(" ")}
+        >
+          {isBusy ? "Seeding…" : "▶ Seed this event"}
+        </button>
+        {!progress.cfgribAvailable && progress.state !== "idle" ? (
+          <p className="font-mono text-[10px] text-warning">
+            cfgrib not installed on the server — the file catalog will
+            populate but no Zarr grids will land. Run{" "}
+            <code className="font-mono text-text">make extras-grib</code>.
+          </p>
+        ) : null}
+      </div>
+      {isBusy ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex w-full flex-col gap-2 rounded-md border border-border/60 bg-bg/40 px-3 py-2 text-left font-mono text-[11px] text-muted"
+        >
+          <span className="text-text">
+            Ingested {totalIngested} file{totalIngested === 1 ? "" : "s"} ·
+            materialised {progress.gridsMaterialised} grid
+            {progress.gridsMaterialised === 1 ? "" : "s"}
+          </span>
+          <span className="text-[10px] text-muted/80">
+            The replay starts as soon as ≥2 grids land. ETA depends on
+            your connection — usually a couple of minutes for a
+            ~6-hour event.
+          </span>
+        </div>
+      ) : null}
+      {progress.state === "failed" ? (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[11px] text-warning">
+          Seed failed: {progress.error ?? "unknown error"}
+        </div>
+      ) : null}
+      {progress.state === "succeeded" ? (
+        <div className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-[11px] text-success">
+          Seed complete — grids loading…
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EventCopyCommandPanel({
   event,
   gridCount,
 }: {
@@ -670,8 +930,9 @@ function EventEmptyState({
         {formatDateTime(new Date(event.endUtc))} UTC).
       </p>
       <p className="text-sm leading-relaxed text-muted">
-        MRMS keeps roughly a year of grids in NOAA's Open Data bucket. Pull
-        them with the <code className="font-mono text-text">--at-time</code>{" "}
+        The admin endpoint is disabled on this server, so you'll seed
+        from the CLI instead. Pull the grids from NOAA's Open Data
+        bucket with the <code className="font-mono text-text">--at-time</code>{" "}
         flag on the existing ingest CLI:
       </p>
       <div className="flex w-full flex-col gap-2 text-left">

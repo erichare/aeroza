@@ -310,3 +310,88 @@ def test_probabilistic_metrics_dataclass_is_frozen() -> None:
     )
     with pytest.raises(AttributeError):
         metrics.brier_score = 1.0  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# Reliability bins                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_reliability_bins_count_and_layout() -> None:
+    """Empty input: every bin shows up, ``count == 0``, lower edges
+    evenly spaced from 0.0 to 0.9."""
+    from aeroza.verify.metrics import (
+        RELIABILITY_BIN_COUNT,
+        reliability_bins_from_arrays,
+    )
+
+    bins = reliability_bins_from_arrays(np.array([]), np.array([]))
+    assert len(bins) == RELIABILITY_BIN_COUNT
+    for i, bin_ in enumerate(bins):
+        assert bin_.lower == pytest.approx(i / RELIABILITY_BIN_COUNT)
+        assert bin_.count == 0
+        assert bin_.observed == 0
+
+
+def test_reliability_bins_assign_to_correct_bucket() -> None:
+    """Forecast 0.55 lands in the bin starting at 0.5; 0.05 in the
+    first bin; 1.0 in the last bin (right-edge inclusive)."""
+    from aeroza.verify.metrics import reliability_bins_from_arrays
+
+    probs = np.array([0.05, 0.55, 1.0])
+    events = np.array([1.0, 0.0, 1.0])
+    bins = reliability_bins_from_arrays(probs, events, n_bins=10)
+    assert bins[0].count == 1
+    assert bins[5].count == 1
+    assert bins[9].count == 1
+    # Other bins are empty.
+    for i in [1, 2, 3, 4, 6, 7, 8]:
+        assert bins[i].count == 0
+
+
+def test_reliability_bins_observed_count_and_mean_prob() -> None:
+    """Multiple cells per bin: observed sums; mean_prob averages the
+    forecast probs that landed in the bin."""
+    from aeroza.verify.metrics import reliability_bins_from_arrays
+
+    probs = np.array([0.62, 0.65, 0.68])  # all in bin 6 ([0.6, 0.7))
+    events = np.array([1.0, 1.0, 0.0])
+    bins = reliability_bins_from_arrays(probs, events, n_bins=10)
+    assert bins[6].count == 3
+    assert bins[6].observed == 2
+    assert bins[6].mean_prob == pytest.approx((0.62 + 0.65 + 0.68) / 3)
+
+
+def test_reliability_bins_skip_nan_cells() -> None:
+    from aeroza.verify.metrics import reliability_bins_from_arrays
+
+    probs = np.array([0.5, np.nan, 0.5])
+    events = np.array([1.0, 0.0, np.nan])
+    bins = reliability_bins_from_arrays(probs, events, n_bins=10)
+    # Only the first cell (prob=0.5, event=1) contributes.
+    assert bins[5].count == 1
+    assert bins[5].observed == 1
+
+
+def test_score_probabilistic_grids_attaches_reliability_bins() -> None:
+    """End-to-end: a 4-member ensemble with two-thirds members above
+    the threshold against a single observation produces one bin
+    populated at 0.5–0.6 (P = 0.5)."""
+    members = np.array(
+        [
+            [40.0, 40.0],
+            [40.0, 10.0],
+            [10.0, 10.0],
+            [10.0, 10.0],
+        ],
+        dtype=np.float32,
+    )
+    obs = np.array([40.0, 10.0], dtype=np.float32)
+    metrics = score_probabilistic_grids(members, obs, threshold_dbz=35.0)
+    # Cell 0: P=0.5 (2/4 members above), observed=1
+    # Cell 1: P=0.25, observed=0
+    bins_by_lower = {round(b.lower, 1): b for b in metrics.reliability_bins}
+    assert bins_by_lower[0.5].count == 1
+    assert bins_by_lower[0.5].observed == 1
+    assert bins_by_lower[0.2].count == 1
+    assert bins_by_lower[0.2].observed == 0

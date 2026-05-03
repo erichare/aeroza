@@ -15,6 +15,9 @@
  */
 
 import type {
+  AdminSeedEventRequest,
+  AdminSeedEventStatusQuery,
+  AdminSeedEventTask,
   AlertDetailFeature,
   AlertFeatureCollection,
   AlertQuery,
@@ -295,6 +298,47 @@ export class AeroaClient {
   }
 
   // -------------------------------------------------------------------------
+  // Admin — seed historical events
+  //
+  // Both endpoints sit under `/v1/admin/seed-event` and are gated by
+  // the `AEROZA_DEV_ADMIN_ENABLED` env flag on the server. When the
+  // flag is off, the routes 404 — the SDK surfaces that as
+  // `AeroaApiError` with status 404, and the /demo button hides the
+  // "Seed this event" affordance.
+
+  /**
+   * Kick off (or rejoin) a background seed for the given window.
+   * Returns immediately with the task snapshot; idempotent under
+   * double-clicks (a second call for the same window returns the
+   * in-flight task).
+   */
+  async startSeedEvent(
+    body: AdminSeedEventRequest,
+  ): Promise<AdminSeedEventTask> {
+    return this.postJson<AdminSeedEventTask>("/v1/admin/seed-event", body);
+  }
+
+  /**
+   * Read-only snapshot of the seed task for the given window. 404s
+   * (raised as `AeroaApiError`) when no task exists yet — the caller
+   * is expected to treat that as "not started" and decide whether to
+   * POST or simply not show progress.
+   */
+  async getSeedEventStatus(
+    query: AdminSeedEventStatusQuery,
+  ): Promise<AdminSeedEventTask> {
+    const params = new URLSearchParams({
+      since: query.since,
+      until: query.until,
+    });
+    if (query.product) params.set("product", query.product);
+    if (query.level) params.set("level", query.level);
+    return this.getJson<AdminSeedEventTask>(
+      this.withQuery("/v1/admin/seed-event/status", params),
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // Internal
 
   private withQuery(path: string, params: URLSearchParams): string {
@@ -309,6 +353,25 @@ export class AeroaClient {
       headers: { Accept: "application/json", ...this.defaultHeaders },
       cache: "no-store",
     });
+    return this.parseResponse<T>(response, path);
+  }
+
+  private async postJson<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.apiBase}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...this.defaultHeaders,
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    return this.parseResponse<T>(response, path);
+  }
+
+  private async parseResponse<T>(response: Response, path: string): Promise<T> {
     if (!response.ok) {
       let detail: string | null = null;
       try {

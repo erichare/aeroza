@@ -17,7 +17,7 @@ returns transparent without the caller having to know the CONUS bounds.
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -30,6 +30,22 @@ from aeroza.tiles.web_mercator import (
     pixel_lonlat_grid,
     tile_bounds,
 )
+
+# Output formats the renderer supports. WebP is content-negotiated
+# via the ``Accept`` header in the route layer; PNG is the default
+# fallback for older browsers and curl-style clients. WebP lossless
+# is ~30-40% smaller than the equivalent PNG for the dBZ ramp's
+# discrete colours, and Pillow encodes it ~2x faster than the default
+# PNG codec — both wins compound on top of the per-tile LRU.
+TileFormat = Literal["png", "webp"]
+DEFAULT_TILE_FORMAT: TileFormat = "png"
+
+# MIME types per format. The route layer maps both directions
+# (Accept → format, format → Content-Type), so keep the table here.
+TILE_FORMAT_CONTENT_TYPE: dict[TileFormat, str] = {
+    "png": "image/png",
+    "webp": "image/webp",
+}
 
 # Switch to bilinear sampling at this zoom and above. Below it, each tile
 # pixel covers many native MRMS cells and nearest-neighbor produces an
@@ -51,11 +67,39 @@ def render_tile_png(
     y: int,
     tile_size: int = TILE_SIZE,
 ) -> bytes:
+    """Render tile ``(z, x, y)`` of the grid stored at ``zarr_uri`` as PNG.
+
+    Backwards-compat alias for :func:`render_tile_image` with
+    ``format="png"``. Existing tests + the cache LRU's first
+    iteration call this; new callers should prefer
+    :func:`render_tile_image` so they can opt into WebP.
+    """
+    return render_tile_image(
+        zarr_uri=zarr_uri,
+        variable=variable,
+        z=z,
+        x=x,
+        y=y,
+        tile_size=tile_size,
+        format="png",
+    )
+
+
+def render_tile_image(
+    *,
+    zarr_uri: str,
+    variable: str,
+    z: int,
+    x: int,
+    y: int,
+    tile_size: int = TILE_SIZE,
+    format: TileFormat = DEFAULT_TILE_FORMAT,
+) -> bytes:
     """Render tile ``(z, x, y)`` of the grid stored at ``zarr_uri``.
 
-    Returns the PNG-encoded bytes. Empty / out-of-domain tiles are
-    returned as fully transparent PNGs so the client doesn't have to
-    handle 404s on every miss.
+    Returns the encoded image bytes in the requested ``format``.
+    Empty / out-of-domain tiles are returned as a fully transparent
+    image so the client doesn't have to handle 404s on every miss.
     """
     bounds = tile_bounds(z, x, y)
     rgba = _render_rgba(
@@ -65,7 +109,7 @@ def render_tile_png(
         tile_size=tile_size,
         zoom=z,
     )
-    return _encode_png(rgba)
+    return _encode(rgba, format=format)
 
 
 def _render_rgba(
@@ -208,29 +252,62 @@ def _to_grid_longitude(lngs: np.ndarray, grid_lngs: np.ndarray) -> np.ndarray:
     return out
 
 
-def _encode_png(rgba: np.ndarray) -> bytes:
-    """RGBA uint8 → PNG bytes via Pillow."""
+def _encode(rgba: np.ndarray, *, format: TileFormat) -> bytes:
+    """RGBA uint8 → encoded image bytes via Pillow.
+
+    PNG is encoded with ``optimize=False`` (default zlib level) — the
+    LRU + immutable cache headers absorb the size cost and the
+    encoder is the cold-render bottleneck. WebP uses ``lossless=True``
+    so the dBZ ramp's discrete bands stay sharp; Pillow encodes
+    lossless WebP ~2x faster than PNG and the bytes are ~30-40%
+    smaller, so both first-render and bytes-on-the-wire benefit.
+    """
     from PIL import Image
 
     if rgba.dtype != np.uint8:
         rgba = rgba.astype(np.uint8)
     img = Image.fromarray(rgba, mode="RGBA")
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=False)
+    if format == "webp":
+        # ``method=4`` is the WebP encoder's middle setting — modest
+        # compression effort, predictable latency. Lossless preserves
+        # the discrete colour bands; lossy would smear the dBZ ramp.
+        img.save(buf, format="WEBP", lossless=True, method=4)
+    else:
+        img.save(buf, format="PNG", optimize=False)
     return buf.getvalue()
 
 
 def transparent_tile_png(*, tile_size: int = TILE_SIZE) -> bytes:
     """Return a fully-transparent PNG of the requested size.
 
-    Useful as the fallback when a grid is unavailable — keeps the
-    MapLibre raster source from spamming 404s.
+    Backwards-compat alias for :func:`transparent_tile_bytes` with
+    ``format="png"``.
+    """
+    return transparent_tile_bytes(tile_size=tile_size, format="png")
+
+
+def transparent_tile_bytes(
+    *,
+    tile_size: int = TILE_SIZE,
+    format: TileFormat = DEFAULT_TILE_FORMAT,
+) -> bytes:
+    """Return a fully-transparent tile in the requested format.
+
+    Used as the fallback when a grid is unavailable — keeps the
+    MapLibre raster source from spamming 404s. Both formats encode
+    identical pixel data; only the byte stream differs.
     """
     rgba = np.zeros((tile_size, tile_size, 4), dtype=np.uint8)
-    return _encode_png(rgba)
+    return _encode(rgba, format=format)
 
 
 __all__ = [
+    "DEFAULT_TILE_FORMAT",
+    "TILE_FORMAT_CONTENT_TYPE",
+    "TileFormat",
+    "render_tile_image",
     "render_tile_png",
+    "transparent_tile_bytes",
     "transparent_tile_png",
 ]

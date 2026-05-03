@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import (
     CheckConstraint,
@@ -23,7 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from aeroza.shared.base import Base
@@ -75,6 +75,14 @@ class VerificationRow(Base):
     ensemble_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     crps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Reliability bins for the ensemble's event-probability forecast,
+    # binned at score time. Stored as JSONB so we can extend the bin
+    # shape (e.g. add per-bin Brier components) without another
+    # migration. Shape: ``[{lower, count, observed, mean_prob}, …]``
+    # with 10 evenly-spaced bins covering [0, 1]. NULL for
+    # deterministic rows; same null/zero convention as the other
+    # probabilistic columns.
+    reliability_bins: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
