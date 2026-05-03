@@ -156,7 +156,7 @@ class SeedEventRunner:
                 cfgrib_available=cfgrib_ok,
             )
             pub = publisher if publisher is not None else NullMrmsFilePublisher()
-            task._task = asyncio.create_task(  # noqa: SLF001 — own field
+            task._task = asyncio.create_task(
                 self._run(db=db, publisher=pub, task=task),
                 name=f"admin.seed_event:{window.since.isoformat()}",
             )
@@ -229,25 +229,36 @@ class SeedEventRunner:
         task.files_updated = result.updated
 
     async def _materialise(self, *, db: Database, task: SeedTask) -> None:
-        prev_pending: int | None = None
+        # Re-use a single S3 client across the loop so we keep one
+        # connection pool warm — same pattern as the long-running
+        # materialiser CLI.
+        s3 = open_data_s3_client()
         for _ in range(MAX_MATERIALISE_ITERATIONS):
             outcome = await materialise_unmaterialised_once(
                 db=db,
+                s3_client=s3,
                 target_root="data/mrms",
+                product=task.window.product,
+                level=task.window.level,
                 batch_size=DEFAULT_MATERIALISE_BATCH,
             )
-            task.grids_materialised += len(outcome.materialised)
-            task.materialise_pending = outcome.pending_after
-            if outcome.pending_after == 0:
+            # ``materialised`` is the count property on
+            # :class:`MaterialiseResult` (the tuple of keys is on
+            # ``materialised_keys``). The poll function returns an
+            # idle result with both tuples empty when nothing's
+            # left to do.
+            task.grids_materialised += outcome.materialised
+            if outcome.materialised == 0 and outcome.failed == 0:
+                # Idle tick — the unmaterialised queue is drained.
                 break
-            if prev_pending is not None and outcome.pending_after >= prev_pending:
-                # No progress this batch — bail rather than loop forever.
+            if outcome.materialised == 0 and outcome.failed > 0:
+                # All candidates this batch failed (e.g. repeated decode
+                # failures). Bail rather than spin on poison rows.
                 log.warning(
                     "admin.seed_event.materialise_stalled",
-                    pending=outcome.pending_after,
+                    failed=outcome.failed,
                 )
                 break
-            prev_pending = outcome.pending_after
 
     @staticmethod
     def _key(window: SeedWindow) -> tuple[datetime, datetime, str, str]:
@@ -284,8 +295,8 @@ def snapshot_for_wire(task: SeedTask) -> SeedTask:
 async def cancel_all() -> None:
     """Cancel any running seed tasks (lifespan shutdown helper)."""
     runner = get_runner()
-    for task in runner._tasks.values():  # noqa: SLF001 — same module
-        inner = task._task  # noqa: SLF001
+    for task in runner._tasks.values():
+        inner = task._task
         if inner is not None and not inner.done():
             inner.cancel()
             with suppress(asyncio.CancelledError):
