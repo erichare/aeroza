@@ -24,14 +24,33 @@ const WINDOW_OPTIONS: ReadonlyArray<{ label: string; hours: number }> = [
   { label: "30d", hours: 720 },
 ];
 
-type MetricKey = "mae" | "pod" | "far" | "csi";
+type MetricKey = "mae" | "pod" | "far" | "csi" | "brier" | "crps";
 
 const METRIC_OPTIONS: ReadonlyArray<{ key: MetricKey; label: string; help: string }> = [
   { key: "mae", label: "MAE", help: "Mean absolute error — lower is better" },
   { key: "pod", label: "POD", help: "Probability of detection (hits / observed events) — higher is better" },
   { key: "far", label: "FAR", help: "False-alarm ratio (false alarms / forecast events) — lower is better" },
   { key: "csi", label: "CSI", help: "Critical success index (hits / (hits + misses + false alarms)) — higher is better" },
+  {
+    key: "brier",
+    label: "Brier",
+    help:
+      "Brier score for the ensemble's event-probability forecast at the dBZ threshold. " +
+      "Range [0,1]; lower is better. Only populated for ensemble forecasters.",
+  },
+  {
+    key: "crps",
+    label: "CRPS",
+    help:
+      "Continuous Ranked Probability Score (fair ensemble estimator). Same units as the variable (dBZ). " +
+      "Lower is better; collapses to MAE for a single-member forecast.",
+  },
 ];
+
+// The metrics that require an ensemble forecaster to be meaningful.
+// Cells from deterministic algorithms render an em-dash with a tooltip
+// explaining "ensembles only" instead of a misleading 0.
+const PROBABILISTIC_METRICS: ReadonlySet<MetricKey> = new Set(["brier", "crps"]);
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -135,7 +154,13 @@ interface CalibrationMatrixData {
   serieses: Map<string, CalibrationSeriesItem>;
   /** Worst observed value for the active metric — anchors bar and sparkline scales. */
   worstValue: number;
+  /** Persistence baseline value at each horizon for the active metric — anchors
+   * the champion-vs-baseline delta ribbon. Null when no persistence row exists
+   * at that horizon, or when persistence didn't have the active metric. */
+  baselineByHorizon: Map<number, number>;
 }
+
+const BASELINE_ALGORITHM = "persistence";
 
 function buildMatrix(
   items: ReadonlyArray<CalibrationItem>,
@@ -155,7 +180,45 @@ function buildMatrix(
   for (const s of seriesItems) {
     serieses.set(`${s.algorithm}:${s.forecastHorizonMinutes}`, s);
   }
-  return { algorithms, horizons, cells, serieses, worstValue };
+  const baselineByHorizon = new Map<number, number>();
+  for (const horizon of horizons) {
+    const baselineCell = cells.get(`${BASELINE_ALGORITHM}:${horizon}`);
+    if (!baselineCell) continue;
+    const v = pickItemMetric(baselineCell, metric);
+    if (v !== null) baselineByHorizon.set(horizon, v);
+  }
+  return { algorithms, horizons, cells, serieses, worstValue, baselineByHorizon };
+}
+
+// For these metrics, lower values are better (forecast accuracy). For
+// the rest (POD, CSI), higher values are better. The champion ribbon
+// uses this to flip the sign on its "↑ X% vs persistence" calculation.
+const LOWER_IS_BETTER: ReadonlySet<MetricKey> = new Set(["mae", "far", "brier", "crps"]);
+
+interface BaselineDelta {
+  /** Always positive: how much better/worse the algorithm is, in metric units. */
+  magnitude: number;
+  /** Percent improvement vs baseline (0–100). Capped at 999 for display. */
+  percent: number;
+  /** True when the algorithm beats the baseline on the active metric. */
+  better: boolean;
+}
+
+function computeBaselineDelta(
+  metric: MetricKey,
+  cellValue: number,
+  baselineValue: number,
+): BaselineDelta | null {
+  if (!Number.isFinite(cellValue) || !Number.isFinite(baselineValue)) return null;
+  // Avoid divide-by-zero on a perfect baseline; we don't render the
+  // ribbon in that degenerate case (the row already says everything).
+  if (baselineValue === 0) return null;
+  const lowerIsBetter = LOWER_IS_BETTER.has(metric);
+  const delta = lowerIsBetter ? baselineValue - cellValue : cellValue - baselineValue;
+  const better = delta > 0;
+  const magnitude = Math.abs(delta);
+  const percent = Math.min(999, (magnitude / Math.abs(baselineValue)) * 100);
+  return { magnitude, percent, better };
 }
 
 /**
@@ -179,7 +242,7 @@ function CalibrationMatrix({
   matrix: CalibrationMatrixData;
   metric: MetricKey;
 }) {
-  const { algorithms, horizons, cells, serieses, worstValue } = matrix;
+  const { algorithms, horizons, cells, serieses, worstValue, baselineByHorizon } = matrix;
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-xs">
@@ -198,11 +261,24 @@ function CalibrationMatrix({
             <tr key={algo} className="rounded-md">
               <td className="rounded-l-md bg-surface/30 py-2 pl-3 pr-4 font-mono text-text">
                 {algo}
+                {algo === BASELINE_ALGORITHM ? (
+                  <span
+                    className="ml-1.5 align-middle font-mono text-[9px] uppercase tracking-wider text-muted/70"
+                    title="Persistence is the baseline every other algorithm is judged against"
+                  >
+                    baseline
+                  </span>
+                ) : null}
               </td>
               {horizons.map((h, i) => {
                 const cell = cells.get(`${algo}:${h}`);
                 const series = serieses.get(`${algo}:${h}`);
                 const isLast = i === horizons.length - 1;
+                const baseline = baselineByHorizon.get(h);
+                // Suppress the delta on the baseline row — it would
+                // always be 0 and clutter the eye away from the cells
+                // it's anchoring.
+                const showDelta = algo !== BASELINE_ALGORITHM && baseline !== undefined;
                 return (
                   <td
                     key={h}
@@ -217,6 +293,7 @@ function CalibrationMatrix({
                         series={series}
                         worstValue={worstValue}
                         metric={metric}
+                        baselineValue={showDelta ? baseline : undefined}
                       />
                     ) : (
                       <Dash />
@@ -237,13 +314,20 @@ function CalibrationCell({
   series,
   worstValue,
   metric,
+  baselineValue,
 }: {
   cell: CalibrationItem;
   series: CalibrationSeriesItem | undefined;
   worstValue: number;
   metric: MetricKey;
+  /** Persistence's value at the same horizon, or undefined when this row is the baseline. */
+  baselineValue: number | undefined;
 }) {
   const value = pickItemMetric(cell, metric);
+  const delta =
+    value !== null && baselineValue !== undefined
+      ? computeBaselineDelta(metric, value, baselineValue)
+      : null;
 
   // For continuous (MAE), bar grows toward worst. For ratios (POD/FAR/CSI),
   // bar fills proportional to the value itself in [0, 1] — so a perfect
@@ -258,25 +342,51 @@ function CalibrationCell({
     p.sampleCount > 0 ? pickPointMetric(p, metric) : null,
   );
 
-  const sparkYMax = isRatioMetric(metric) ? 1 : worstValue > 0 ? worstValue : undefined;
+  const sparkYMax = metric === "brier" || isRatioMetric(metric)
+    ? 1
+    : worstValue > 0
+      ? worstValue
+      : undefined;
+  const isProbabilistic = PROBABILISTIC_METRICS.has(metric);
+
+  // Probabilistic metrics use Brier-sample-count (ensemble-only cells)
+  // as the denominator; deterministic metrics use the full sample count.
+  const sampleCountForMetric = isProbabilistic ? cell.brierSampleCount : cell.sampleCount;
+  // Hide the bar when there's no data for this metric (e.g. Brier on a
+  // deterministic-only cell). Empty cells render the dash inline below.
+  const hasValue = value !== null;
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="font-mono text-sm tabular-nums text-text">
-          {value === null ? "—" : formatMetric(metric, value)}
+        <span className="flex items-baseline gap-2">
+          <span
+            className="font-mono text-sm tabular-nums text-text"
+            title={
+              !hasValue && isProbabilistic
+                ? "Brier/CRPS only score ensemble forecasters. Run aeroza-nowcast-mrms --algorithm lagged-ensemble alongside this row."
+                : undefined
+            }
+          >
+            {hasValue ? formatMetric(metric, value) : "—"}
+          </span>
+          {delta ? <BaselineDeltaPill delta={delta} /> : null}
         </span>
         <span className="font-mono text-[10px] tabular-nums text-muted">
-          n={formatCount(cell.sampleCount)}
+          n={formatCount(sampleCountForMetric)}
         </span>
       </div>
-      <div className="relative h-1.5 overflow-hidden rounded-full bg-bg/60">
-        <span
-          className="absolute inset-y-0 left-0 bg-accent/60"
-          style={{ width: `${barPct}%` }}
-          aria-hidden
-        />
-      </div>
+      {hasValue ? (
+        <div className="relative h-1.5 overflow-hidden rounded-full bg-bg/60">
+          <span
+            className="absolute inset-y-0 left-0 bg-accent/60"
+            style={{ width: `${barPct}%` }}
+            aria-hidden
+          />
+        </div>
+      ) : (
+        <div className="h-1.5" aria-hidden />
+      )}
       {sparkValues && sparkValues.length > 1 ? (
         <Sparkline
           values={sparkValues}
@@ -296,6 +406,15 @@ function CalibrationCell({
             </span>
             <span title="RMSE mean">rmse {cell.rmseMean.toFixed(2)}</span>
           </>
+        ) : isProbabilistic ? (
+          <>
+            <span title="Ensemble size for this row (members per forecast)">
+              {cell.ensembleSize === null ? "M —" : `M=${cell.ensembleSize}`}
+            </span>
+            <span title="MAE mean (member-mean forecast)">
+              mae {cell.maeMean.toFixed(2)}
+            </span>
+          </>
         ) : (
           <>
             <span title="Threshold for POD/FAR/CSI (dBZ)">
@@ -306,6 +425,38 @@ function CalibrationCell({
         )}
       </div>
     </div>
+  );
+}
+
+function BaselineDeltaPill({ delta }: { delta: BaselineDelta }) {
+  // Tiny ribbon: arrow + percent. Green when this algorithm beats
+  // persistence on the active metric; muted-warm when it trails. We
+  // don't go red — losing to the baseline isn't a failure mode worth
+  // shouting about, just a worth-knowing.
+  const tone = delta.better
+    ? "border-success/30 bg-success/10 text-success"
+    : "border-warning/30 bg-warning/10 text-warning";
+  const arrow = delta.better ? "↑" : "↓";
+  // Percent gets <1 = "<1%", whole-number resolution otherwise. Tighter
+  // than three decimals; the ribbon is supposed to be a glance.
+  const percent =
+    delta.percent < 1
+      ? "<1%"
+      : delta.percent >= 100
+        ? `${Math.round(delta.percent)}%`
+        : `${delta.percent.toFixed(0)}%`;
+  return (
+    <span
+      className={[
+        "rounded-sm border px-1.5 py-px font-mono text-[9px] uppercase tracking-wider",
+        tone,
+      ].join(" ")}
+      title={`${
+        delta.better ? "Beats" : "Trails"
+      } persistence by ${delta.magnitude.toFixed(3)} (${delta.percent.toFixed(1)}%) on this metric`}
+    >
+      {arrow} {percent}
+    </span>
   );
 }
 
@@ -426,6 +577,33 @@ function Footnote({ metric }: { metric: MetricKey }) {
       </p>
     );
   }
+  if (metric === "brier") {
+    return (
+      <p className="mt-5 text-[11px] text-muted">
+        Brier score = mean squared error of the ensemble's event-probability
+        forecast against the {`{0,1}`} observation at the verifier's threshold
+        (default 35 dBZ). Range [0,1]; lower is better. Only ensemble
+        forecasters (e.g.{" "}
+        <code className="font-mono">--algorithm lagged-ensemble</code>) populate
+        Brier — deterministic rows render <span className="font-mono">—</span>.
+        The <span className="font-mono">M=</span> badge below each cell
+        is the ensemble size; <span className="font-mono">n=</span> is the
+        number of cells that contributed.
+      </p>
+    );
+  }
+  if (metric === "crps") {
+    return (
+      <p className="mt-5 text-[11px] text-muted">
+        CRPS = Continuous Ranked Probability Score (fair ensemble estimator).
+        Same units as the variable (dBZ); lower is better. Generalises MAE to
+        the full ensemble distribution and collapses back to MAE for a
+        single-member forecast — so you can read "how much spread of
+        probability around the truth?" off this number. Only ensemble
+        forecasters populate it.
+      </p>
+    );
+  }
   return (
     <p className="mt-5 text-[11px] text-muted">
       POD / FAR / CSI are categorical skill scores at the verifier's
@@ -473,6 +651,10 @@ function pickItemMetric(item: CalibrationItem, metric: MetricKey): number | null
       return item.far;
     case "csi":
       return item.csi;
+    case "brier":
+      return item.brierMean;
+    case "crps":
+      return item.crpsMean;
   }
 }
 
@@ -486,11 +668,22 @@ function pickPointMetric(point: CalibrationSeriesPoint, metric: MetricKey): numb
       return point.far;
     case "csi":
       return point.csi;
+    case "brier":
+      return point.brierMean;
+    case "crps":
+      return point.crpsMean;
   }
 }
 
 function computeBarPct(metric: MetricKey, value: number | null, worstValue: number): number {
   if (value === null) return 0;
+  if (metric === "brier") {
+    // Brier ∈ [0, 1]; the bar fills proportionally to the score itself
+    // (lower-is-better). Same convention the ratio metrics use, just
+    // with the inverse interpretation — a tall bar means a poorly
+    // calibrated probability.
+    return Math.min(100, Math.max(0, value * 100));
+  }
   if (isRatioMetric(metric)) {
     return Math.min(100, Math.max(0, value * 100));
   }
@@ -499,6 +692,7 @@ function computeBarPct(metric: MetricKey, value: number | null, worstValue: numb
 }
 
 function formatMetric(metric: MetricKey, value: number): string {
+  if (metric === "brier") return value.toFixed(3);
   if (isRatioMetric(metric)) return value.toFixed(3);
   return value.toFixed(2);
 }
@@ -513,12 +707,19 @@ function metricTitle(metric: MetricKey): string {
       return "FAR (false-alarm ratio)";
     case "csi":
       return "CSI (critical success index)";
+    case "brier":
+      return "Brier score (probabilistic)";
+    case "crps":
+      return "CRPS (continuous ranked probability score)";
   }
 }
 
 function metricSubtitle(metric: MetricKey): string {
   if (metric === "mae") {
     return "GET /v1/calibration · sample-weighted, grouped by algorithm × horizon";
+  }
+  if (PROBABILISTIC_METRICS.has(metric)) {
+    return "GET /v1/calibration · ensemble rows only, grouped by algorithm × horizon";
   }
   return "GET /v1/calibration · summed contingency table @ 35 dBZ, grouped by algorithm × horizon";
 }

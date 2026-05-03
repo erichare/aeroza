@@ -330,9 +330,14 @@ export default function ConceptsPage() {
         That's what the sparkline on{" "}
         <Link href="/calibration">/calibration</Link> charts: same Y-axis
         per row so a row's downward trend lines up with a peer's at a
-        glance. The metric switcher above the matrix swaps between MAE
-        (continuous error) and POD/FAR/CSI (skill at the configured
-        threshold).
+        glance. The metric switcher above the matrix has six tabs — MAE
+        (continuous error), POD / FAR / CSI (categorical skill at the
+        configured threshold), and <strong>Brier</strong> /{" "}
+        <strong>CRPS</strong> (probabilistic skill, ensemble rows only).
+        Each non-baseline cell shows a small{" "}
+        <span className="font-mono">↑/↓ N% vs persistence</span> ribbon
+        on the active metric so the question "did this algorithm beat
+        the baseline?" answers itself at a glance.
       </p>
       <p>
         Per the plan §3.3, calibration is the <em>trust</em> signal nobody

@@ -156,9 +156,16 @@ function RulePreview({ rule }: { rule: AlertRule }) {
 function EmptyState() {
   return (
     <div className="rounded-xl border border-dashed border-border/60 bg-bg/30 px-5 py-6 text-center">
-      <p className="text-sm text-muted">No alert rules yet.</p>
-      <p className="mt-1 text-xs text-muted/70">
-        Create one with <code className="font-mono">POST /v1/alert-rules</code>{" "}
+      <p className="text-sm text-text">No alert rules yet.</p>
+      <p className="mt-1 text-xs text-muted">
+        Alert rules filter the webhook firehose by geography. Two predicate
+        kinds: <code className="font-mono">point</code> (alert polygon
+        intersects a circle of radius R around (lat, lng)) and{" "}
+        <code className="font-mono">polygon</code> (alert polygon intersects a
+        caller-supplied GeoJSON polygon).
+      </p>
+      <p className="mt-3 text-xs text-muted/80">
+        Create one via <code className="font-mono">POST /v1/alert-rules</code>{" "}
         or the{" "}
         <a
           href="http://localhost:8000/docs#/alert-rules"

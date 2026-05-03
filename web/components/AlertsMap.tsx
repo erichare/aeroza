@@ -553,8 +553,22 @@ function DbzRampLegend() {
   ).join(", ")})`;
   return (
     <div className="border-t border-border/40 pt-2">
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted">
-        Reflectivity (dBZ)
+      <div
+        className="mb-1 flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-muted"
+        title={
+          // Inline tooltip — most viewers know dBZ but a few don't, and a
+          // one-line explainer beats them having to leave the map. The
+          // 35 dBZ anchor connects this legend to the calibration
+          // panel's POD/FAR/CSI threshold so the two surfaces visibly
+          // talk about the same number.
+          "Decibel-relative-to-Z. Logarithmic radar reflectivity, integrating drop size and rate. " +
+          "Light rain ~20 · moderate ~30 · 35+ is operational meteorology's 'convective cell' cutoff (matches /calibration's threshold) · 50+ likely large hail or intense storms."
+        }
+      >
+        <span>Reflectivity (dBZ)</span>
+        <span aria-hidden className="rounded-full border border-border/60 px-1 text-[8px] leading-tight text-muted/70">
+          ?
+        </span>
       </div>
       <div
         className="h-2 w-44 rounded-sm"
@@ -564,7 +578,10 @@ function DbzRampLegend() {
       <div className="mt-1 flex justify-between font-mono text-[9px] text-muted">
         <span>5</span>
         <span>25</span>
-        <span>45</span>
+        <span title="Operational 'convective cell' cutoff — the threshold the /calibration page scores POD/FAR/CSI at by default">
+          35
+        </span>
+        <span>50</span>
         <span>65+</span>
       </div>
     </div>

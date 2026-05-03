@@ -96,6 +96,13 @@ export function PulseStrip() {
     [stats, now],
   );
   const headlineMae = useMemo(() => pickHeadlineMae(calibration), [calibration]);
+  // Auto-shows the ensemble pill the moment a Brier-scored row appears
+  // for the canonical 30-min horizon. When no ensemble row exists, the
+  // strip stays on its three-pill default — no empty placeholder.
+  const ensembleHeadline = useMemo(
+    () => pickEnsembleHeadline(calibration),
+    [calibration],
+  );
 
   return (
     <div className="hidden items-center gap-1.5 md:flex">
@@ -130,6 +137,14 @@ export function PulseStrip() {
             : "No verifications scored in the last hour"
         }
       />
+      {ensembleHeadline !== null ? (
+        <Pill
+          href="/calibration"
+          label={`Brier ${CALIBRATION_WINDOW_HOURS}h`}
+          value={ensembleHeadline.brier.toFixed(3)}
+          title={`${ensembleHeadline.algorithm} · M=${ensembleHeadline.size} ensemble · 30-min horizon · last ${CALIBRATION_WINDOW_HOURS}h`}
+        />
+      ) : null}
     </div>
   );
 }
@@ -195,4 +210,38 @@ function pickHeadlineMae(
     (a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes,
   );
   return sorted[0]?.maeMean ?? null;
+}
+
+interface EnsembleHeadline {
+  brier: number;
+  size: number;
+  algorithm: string;
+}
+
+function pickEnsembleHeadline(
+  items: ReadonlyArray<CalibrationItem> | null,
+): EnsembleHeadline | null {
+  if (items === null || items.length === 0) return null;
+  // Same priority as the hero card: ensemble row at 30 min first, then
+  // the lowest-horizon ensemble row. Stays in sync if/when the
+  // `HeroVerificationCard` heuristic evolves.
+  const ensemble30 = items.find(
+    (i) =>
+      i.brierMean !== null &&
+      i.ensembleSize !== null &&
+      i.forecastHorizonMinutes === 30,
+  );
+  const target =
+    ensemble30 ??
+    [...items]
+      .filter((i) => i.brierMean !== null && i.ensembleSize !== null)
+      .sort((a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes)[0];
+  if (!target || target.brierMean === null || target.ensembleSize === null) {
+    return null;
+  }
+  return {
+    brier: target.brierMean,
+    size: target.ensembleSize,
+    algorithm: target.algorithm,
+  };
 }
