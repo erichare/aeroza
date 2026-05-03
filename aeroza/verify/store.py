@@ -13,7 +13,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aeroza.verify.metrics import DeterministicMetrics
+from aeroza.verify.metrics import DeterministicMetrics, ProbabilisticMetrics
 from aeroza.verify.models import VerificationRow
 
 log = structlog.get_logger(__name__)
@@ -30,6 +30,9 @@ _MUTABLE_COLUMNS: Final[tuple[str, ...]] = (
     "misses",
     "false_alarms",
     "correct_negatives",
+    "ensemble_size",
+    "brier_score",
+    "crps",
 )
 
 
@@ -44,6 +47,7 @@ async def upsert_verification(
     horizon_minutes: int,
     valid_at: datetime,
     metrics: DeterministicMetrics,
+    probabilistic: ProbabilisticMetrics | None = None,
 ) -> VerificationRow:
     """Insert or update one verification row.
 
@@ -51,6 +55,11 @@ async def upsert_verification(
     pair is idempotent — useful when a nowcast is recomputed (e.g.
     algorithm tuning) and we want fresh scores without first deleting
     the old row.
+
+    ``probabilistic`` is set when the source nowcast was an ensemble.
+    When passed, ``ensemble_size``, ``brier_score``, and ``crps`` are
+    written; otherwise those columns stay NULL so the calibration
+    aggregator can skip them.
     """
     row = {
         "nowcast_id": nowcast_id,
@@ -69,6 +78,9 @@ async def upsert_verification(
         "misses": metrics.misses,
         "false_alarms": metrics.false_alarms,
         "correct_negatives": metrics.correct_negatives,
+        "ensemble_size": probabilistic.ensemble_size if probabilistic is not None else None,
+        "brier_score": probabilistic.brier_score if probabilistic is not None else None,
+        "crps": probabilistic.crps if probabilistic is not None else None,
     }
     insert_stmt = pg_insert(VerificationRow).values(row)
     update_set: dict[str, Any] = {col: insert_stmt.excluded[col] for col in _MUTABLE_COLUMNS}
@@ -105,6 +117,15 @@ class CalibrationBucket:
     window so the route layer can compute POD/FAR/CSI as ratios on
     read. Sums survive aggregation; ratios don't (averaging ratios is
     not the same as the ratio of averages).
+
+    Probabilistic fields (``brier_mean`` / ``crps_mean``) are
+    sample-weighted across only those rows where the ensemble
+    metrics were populated (``brier_score IS NOT NULL`` etc.). They
+    are ``None`` when no ensemble rows contributed — surfaced as
+    ``null`` rather than an invented 0 by the route layer.
+    ``ensemble_size`` is set when every ensemble row in the bucket
+    used the same ``M`` (None on mismatch, same convention as the
+    threshold field).
     """
 
     algorithm: str
@@ -123,6 +144,13 @@ class CalibrationBucket:
     misses_total: int
     false_alarms_total: int
     correct_negatives_total: int
+    # Probabilistic aggregate. ``brier_sample_count`` is the
+    # cell-weighted denominator of the Brier/CRPS means; 0 means no
+    # ensemble rows contributed.
+    ensemble_size: int | None
+    brier_sample_count: int
+    brier_mean: float | None
+    crps_mean: float | None
 
 
 async def aggregate_calibration(
@@ -161,6 +189,25 @@ async def aggregate_calibration(
     distinct_thresholds = func.count(func.distinct(VerificationRow.threshold_dbz))
     any_threshold = func.max(VerificationRow.threshold_dbz)
 
+    # Probabilistic aggregates. The weighted sums and the sample-count
+    # denominator only count rows where the column is not NULL — so a
+    # bucket containing both deterministic and ensemble rows surfaces a
+    # Brier/CRPS mean weighted by the ensemble rows alone. Same for
+    # ensemble_size: distinct-count > 1 → mixed M → return None.
+    brier_weighted = func.sum(VerificationRow.brier_score * VerificationRow.sample_count)
+    crps_weighted = func.sum(VerificationRow.crps * VerificationRow.sample_count)
+    brier_total_samples = func.coalesce(
+        func.sum(
+            case(
+                (VerificationRow.brier_score.is_not(None), VerificationRow.sample_count),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    distinct_ensemble_sizes = func.count(func.distinct(VerificationRow.ensemble_size))
+    any_ensemble_size = func.max(VerificationRow.ensemble_size)
+
     stmt = (
         select(
             VerificationRow.algorithm,
@@ -178,6 +225,11 @@ async def aggregate_calibration(
             ),
             any_threshold.label("any_threshold"),
             distinct_thresholds.label("distinct_thresholds"),
+            brier_total_samples.label("brier_sample_count"),
+            brier_weighted.label("brier_weighted"),
+            crps_weighted.label("crps_weighted"),
+            any_ensemble_size.label("any_ensemble_size"),
+            distinct_ensemble_sizes.label("distinct_ensemble_sizes"),
         )
         .where(VerificationRow.verified_at >= since)
         .group_by(
@@ -204,6 +256,14 @@ async def aggregate_calibration(
             if row["any_threshold"] is not None and int(row["distinct_thresholds"]) == 1
             else None
         )
+        brier_samples = int(row["brier_sample_count"] or 0)
+        ensemble_size = (
+            int(row["any_ensemble_size"])
+            if row["any_ensemble_size"] is not None and int(row["distinct_ensemble_sizes"]) == 1
+            else None
+        )
+        brier_mean = float(row["brier_weighted"]) / brier_samples if brier_samples > 0 else None
+        crps_mean = float(row["crps_weighted"]) / brier_samples if brier_samples > 0 else None
         buckets.append(
             CalibrationBucket(
                 algorithm=row["algorithm"],
@@ -218,6 +278,10 @@ async def aggregate_calibration(
                 misses_total=int(row["misses_total"] or 0),
                 false_alarms_total=int(row["false_alarms_total"] or 0),
                 correct_negatives_total=int(row["correct_negatives_total"] or 0),
+                ensemble_size=ensemble_size,
+                brier_sample_count=brier_samples,
+                brier_mean=brier_mean,
+                crps_mean=crps_mean,
             )
         )
     return tuple(buckets)
@@ -256,6 +320,10 @@ class CalibrationSeriesPoint:
     misses_total: int
     false_alarms_total: int
     correct_negatives_total: int
+    ensemble_size: int | None
+    brier_sample_count: int
+    brier_mean: float | None
+    crps_mean: float | None
 
 
 async def aggregate_calibration_series(
@@ -301,6 +369,19 @@ async def aggregate_calibration_series(
 
     distinct_thresholds = func.count(func.distinct(VerificationRow.threshold_dbz))
     any_threshold = func.max(VerificationRow.threshold_dbz)
+    brier_weighted = func.sum(VerificationRow.brier_score * VerificationRow.sample_count)
+    crps_weighted = func.sum(VerificationRow.crps * VerificationRow.sample_count)
+    brier_total_samples = func.coalesce(
+        func.sum(
+            case(
+                (VerificationRow.brier_score.is_not(None), VerificationRow.sample_count),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    distinct_ensemble_sizes = func.count(func.distinct(VerificationRow.ensemble_size))
+    any_ensemble_size = func.max(VerificationRow.ensemble_size)
     stmt = (
         select(
             VerificationRow.algorithm,
@@ -319,6 +400,11 @@ async def aggregate_calibration_series(
             ),
             any_threshold.label("any_threshold"),
             distinct_thresholds.label("distinct_thresholds"),
+            brier_total_samples.label("brier_sample_count"),
+            brier_weighted.label("brier_weighted"),
+            crps_weighted.label("crps_weighted"),
+            any_ensemble_size.label("any_ensemble_size"),
+            distinct_ensemble_sizes.label("distinct_ensemble_sizes"),
         )
         .where(VerificationRow.verified_at >= since)
         .group_by(
@@ -355,6 +441,14 @@ async def aggregate_calibration_series(
             if row["any_threshold"] is not None and int(row["distinct_thresholds"]) == 1
             else None
         )
+        brier_samples = int(row["brier_sample_count"] or 0)
+        ensemble_size = (
+            int(row["any_ensemble_size"])
+            if row["any_ensemble_size"] is not None and int(row["distinct_ensemble_sizes"]) == 1
+            else None
+        )
+        brier_mean = float(row["brier_weighted"]) / brier_samples if brier_samples > 0 else None
+        crps_mean = float(row["crps_weighted"]) / brier_samples if brier_samples > 0 else None
         points.append(
             CalibrationSeriesPoint(
                 algorithm=row["algorithm"],
@@ -370,6 +464,10 @@ async def aggregate_calibration_series(
                 misses_total=int(row["misses_total"] or 0),
                 false_alarms_total=int(row["false_alarms_total"] or 0),
                 correct_negatives_total=int(row["correct_negatives_total"] or 0),
+                ensemble_size=ensemble_size,
+                brier_sample_count=brier_samples,
+                brier_mean=brier_mean,
+                crps_mean=crps_mean,
             )
         )
     return tuple(points)

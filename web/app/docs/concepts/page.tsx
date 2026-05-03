@@ -336,11 +336,17 @@ export default function ConceptsPage() {
       </p>
       <p>
         Per the plan §3.3, calibration is the <em>trust</em> signal nobody
-        else in the dev-API weather space publishes. Brier scores and
-        reliability diagrams (probabilistic forecasts) land once we have
-        an ensemble forecaster; the deterministic equivalents — POD, FAR,
-        and CSI — already point honestly at how each algorithm handles
-        threshold crossings on the persistence and pySTEPS baselines.
+        else in the dev-API weather space publishes. The probabilistic
+        complement to POD/FAR/CSI now ships too: when the source nowcast
+        is an ensemble (e.g.{" "}
+        <code>--algorithm lagged-ensemble</code>), the verifier scores{" "}
+        <strong>Brier</strong> (mean squared error of event probability)
+        and the <strong>fair-CRPS</strong> ensemble estimator
+        (continuous ranked probability score) and the calibration
+        aggregate exposes <code>brierMean</code> / <code>crpsMean</code>{" "}
+        / <code>ensembleSize</code> alongside MAE. Reliability diagrams
+        and a STEPS-perturbed ensemble are the next probabilistic-skill
+        steps.
       </p>
 
       <h2>Webhooks &amp; alert rules</h2>

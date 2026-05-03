@@ -34,6 +34,7 @@ _MUTABLE_COLUMNS: Final[tuple[str, ...]] = (
     "shape_json",
     "dtype",
     "nbytes",
+    "ensemble_size",
 )
 
 
@@ -52,8 +53,14 @@ async def upsert_nowcast(
     shape: tuple[int, ...],
     dtype: str,
     nbytes: int,
+    ensemble_size: int = 1,
 ) -> NowcastRow:
-    """Insert or update one nowcast row. Returns the persisted ORM row."""
+    """Insert or update one nowcast row. Returns the persisted ORM row.
+
+    ``ensemble_size`` defaults to 1 so deterministic forecasters'
+    call sites need no changes; the column was added with a server
+    default of 1 to match.
+    """
     row = {
         "source_file_key": source_file_key,
         "product": product,
@@ -67,6 +74,7 @@ async def upsert_nowcast(
         "shape_json": json.dumps(list(shape)),
         "dtype": dtype,
         "nbytes": nbytes,
+        "ensemble_size": ensemble_size,
     }
     insert_stmt = pg_insert(NowcastRow).values(row)
     update_set: dict[str, Any] = {col: insert_stmt.excluded[col] for col in _MUTABLE_COLUMNS}

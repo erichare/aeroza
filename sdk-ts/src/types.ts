@@ -224,6 +224,13 @@ export interface Stats {
  * contingency table and are nullable: `null` means the contributing rows
  * had no categorical metrics, or scored at mismatched thresholds, or the
  * denominator was zero.
+ *
+ * Probabilistic fields (`brierMean`, `crpsMean`, `ensembleSize`) are
+ * populated only when at least one ensemble nowcast contributed to the
+ * bucket. `brierMean` and `crpsMean` are sample-weighted across only
+ * those ensemble rows; `brierSampleCount` is the cell count behind the
+ * means. `ensembleSize` is `null` when rows in the bucket used different
+ * ensemble sizes.
  */
 export interface CalibrationItem {
   algorithm: string;
@@ -237,6 +244,10 @@ export interface CalibrationItem {
   pod: number | null;
   far: number | null;
   csi: number | null;
+  ensembleSize: number | null;
+  brierSampleCount: number;
+  brierMean: number | null;
+  crpsMean: number | null;
 }
 
 export interface CalibrationResponse {
@@ -269,6 +280,10 @@ export interface CalibrationSeriesPoint {
   pod: number | null;
   far: number | null;
   csi: number | null;
+  ensembleSize: number | null;
+  brierSampleCount: number;
+  brierMean: number | null;
+  crpsMean: number | null;
 }
 
 /** Per-(algorithm × horizon) sparkline. Points are oldest → newest. */

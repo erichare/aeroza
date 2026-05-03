@@ -80,6 +80,13 @@ class PystepsForecaster:
     def algorithm(self) -> str:
         return PYSTEPS_ALGORITHM
 
+    @property
+    def history_depth(self) -> int:
+        # We need ``lookback`` consecutive frames (current + lookback-1
+        # past) for Lucas–Kanade. Add one frame of slack so a tick that
+        # races the materialiser still has enough.
+        return self.lookback + 1
+
     async def forecast(
         self,
         observation: xr.DataArray,

@@ -6,8 +6,12 @@ Runs once per observation grid event:
    (within :data:`MATCH_WINDOW_SECONDS` of jitter) for the same
    product/level.
 2. For each match, read both Zarr stores and compute MAE / bias /
-   RMSE against the observation.
-3. Upsert one ``nowcast_verifications`` row per pair.
+   RMSE + categorical POD/FAR/CSI counts against the observation.
+3. When the nowcast is an ensemble (``mrms_nowcasts.ensemble_size >
+   1``), additionally compute Brier and CRPS over the member dim;
+   the deterministic metrics use the member-mean as their forecast.
+4. Upsert one ``nowcast_verifications`` row per pair, with the
+   probabilistic columns NULL for deterministic rows.
 
 Side effects: Zarr reads, DB writes. The session pool gets a fresh
 session per upsert so a single bad forecast can't pin a connection.
@@ -18,19 +22,20 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+import numpy as np
 import structlog
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    import numpy as np
 
 from aeroza.ingest.mrms_grids_models import MrmsGridRow
 from aeroza.ingest.mrms_models import MrmsFileRow
 from aeroza.nowcast.models import NowcastRow
 from aeroza.nowcast.store import find_nowcasts_for_observation
 from aeroza.shared.db import Database
-from aeroza.verify.metrics import score_deterministic_grids
+from aeroza.verify.metrics import (
+    ProbabilisticMetrics,
+    score_deterministic_grids,
+    score_probabilistic_grids,
+)
 from aeroza.verify.models import VerificationRow
 from aeroza.verify.store import upsert_verification
 
@@ -105,16 +110,52 @@ async def verify_observation(
             )
             continue
 
-        if forecast_array.shape != observation_array.shape:
-            log.warning(
-                "verify.nowcast.shape_mismatch",
-                nowcast_id=str(nowcast.id),
-                forecast_shape=forecast_array.shape,
-                observation_shape=observation_array.shape,
+        # Ensemble forecasts come back as (member, *spatial). Collapse
+        # to a deterministic (member-mean) array for MAE/POD scoring,
+        # and run the probabilistic scorer on the member dim. The
+        # source of truth for "is this an ensemble?" is the catalog
+        # row's ``ensemble_size``, not the array shape — the row was
+        # written from the same prediction so it can't disagree, and
+        # checking the row keeps us robust against single-member
+        # ensembles whose Zarr happens to omit the leading dim.
+        is_ensemble = int(nowcast.ensemble_size or 1) > 1
+        if is_ensemble:
+            if forecast_array.ndim != observation_array.ndim + 1:
+                log.warning(
+                    "verify.nowcast.ensemble_shape_mismatch",
+                    nowcast_id=str(nowcast.id),
+                    forecast_shape=forecast_array.shape,
+                    observation_shape=observation_array.shape,
+                )
+                continue
+            if forecast_array.shape[1:] != observation_array.shape:
+                log.warning(
+                    "verify.nowcast.ensemble_spatial_mismatch",
+                    nowcast_id=str(nowcast.id),
+                    forecast_shape=forecast_array.shape,
+                    observation_shape=observation_array.shape,
+                )
+                continue
+            # Member-wise mean is the natural deterministic projection;
+            # nanmean lets a single member's coverage hole not blank an
+            # otherwise-good cell.
+            forecast_for_deterministic = np.nanmean(forecast_array, axis=0)
+            probabilistic: ProbabilisticMetrics | None = score_probabilistic_grids(
+                forecast_array, observation_array
             )
-            continue
+        else:
+            if forecast_array.shape != observation_array.shape:
+                log.warning(
+                    "verify.nowcast.shape_mismatch",
+                    nowcast_id=str(nowcast.id),
+                    forecast_shape=forecast_array.shape,
+                    observation_shape=observation_array.shape,
+                )
+                continue
+            forecast_for_deterministic = forecast_array
+            probabilistic = None
 
-        metrics = score_deterministic_grids(forecast_array, observation_array)
+        metrics = score_deterministic_grids(forecast_for_deterministic, observation_array)
 
         async with db.sessionmaker() as session:
             row = await upsert_verification(
@@ -127,6 +168,7 @@ async def verify_observation(
                 horizon_minutes=nowcast.forecast_horizon_minutes,
                 valid_at=observation_file.valid_at,
                 metrics=metrics,
+                probabilistic=probabilistic,
             )
             await session.commit()
         scored.append(row)
@@ -142,14 +184,13 @@ async def verify_observation(
 
 def _load_zarr_array(*, zarr_uri: str, variable: str) -> np.ndarray:
     """Synchronous Zarr load → numpy array (eagerly materialised)."""
-    import numpy as np_runtime
     import xarray as xr
 
     ds = xr.open_zarr(zarr_uri)
     try:
         if variable not in ds.variables:
             raise KeyError(f"variable {variable!r} not in {zarr_uri}")
-        values: np_runtime.ndarray = ds[variable].load().values
+        values: np.ndarray = ds[variable].load().values
         return values
     finally:
         ds.close()

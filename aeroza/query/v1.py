@@ -43,8 +43,9 @@ Routes here are URL-versioned (``/v1/...``). The current surface:
   valid_at), populated by ``aeroza-nowcast-mrms``.
 - ``GET /v1/calibration`` — aggregate verification per
   ``(algorithm, forecastHorizonMinutes)`` over a window: sample-weighted MAE
-  / bias / RMSE plus categorical POD / FAR / CSI from the summed contingency
-  table. The public face of the §3.3 moat.
+  / bias / RMSE, categorical POD / FAR / CSI from the summed contingency
+  table, and probabilistic Brier / CRPS over any ensemble rows in the
+  bucket. The public face of the §3.3 moat.
 - ``GET /v1/calibration/series`` — same metrics, time-bucketed so the
   front-end can chart accuracy evolution per algorithm.
 
@@ -926,9 +927,16 @@ async def get_stats_route(
     description=(
         "Returns sample-weighted MAE / bias / RMSE for every "
         "(algorithm, forecastHorizonMinutes) pair that has scored "
-        "verifications inside the requested window. The public face of "
-        "the §3.3 calibration moat — point a chart at this and you can "
-        "watch a real algorithm pull ahead of the persistence baseline.\n\n"
+        "verifications inside the requested window, alongside "
+        "categorical POD / FAR / CSI from the summed contingency "
+        "table and probabilistic Brier / CRPS over any ensemble "
+        "rows in the bucket. The public face of the §3.3 "
+        "calibration moat — point a chart at this and you can watch "
+        "a real algorithm pull ahead of the persistence baseline.\n\n"
+        "Probabilistic fields (``brierMean``, ``crpsMean``, "
+        "``ensembleSize``) are ``null`` for buckets that contain no "
+        "ensemble forecasts; ``brierSampleCount`` reports the cells "
+        "behind the means so you can detect 'one tiny ensemble row'.\n\n"
         "Window defaults to the last 24h. Pass ``windowHours`` to widen "
         "or narrow it; pass ``algorithm`` / ``product`` / ``level`` to "
         "scope the aggregation."
@@ -990,9 +998,10 @@ _CALIBRATION_BUCKET_MAX_SECONDS: int = 86_400
     summary="Time-series calibration metrics, per (algorithm × horizon × bucket)",
     description=(
         "Sparkline-shaped companion to ``/v1/calibration``: same sample-"
-        "weighted means, but each (algorithm, forecastHorizonMinutes) "
-        "row carries an ordered list of bucketed points so the front-end "
-        "can chart how MAE moves over the window.\n\n"
+        "weighted means and probabilistic Brier/CRPS aggregates, but "
+        "each (algorithm, forecastHorizonMinutes) row carries an "
+        "ordered list of bucketed points so the front-end can chart "
+        "how every metric moves over the window.\n\n"
         "``bucketSeconds`` controls bucket width (default 1 h). Series "
         "are sorted ``(algorithm, horizon, bucketStart)`` so the wire "
         "shape is render-ready."
