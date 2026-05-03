@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    Aeroza favicon — stylised supercell hook echo.
+    Geometry mirrored from web/components/AerozaLogo.tsx (AEROZA_GLYPH_PATH).
+    Brass on transparent so the OS picks the right contrast.
+  -->
+  <path fill="#ae7a33" d="M 32 8 C 18 8, 8 20, 8 30 C 8 42, 18 50, 28 50 C 34 50, 38 52, 42 54 C 50 56, 56 52, 56 46 C 56 40, 50 36, 44 38 C 40 39, 38 42, 38 46 C 38 36, 34 34, 28 34 C 22 34, 18 30, 18 26 C 18 18, 24 14, 32 14 C 38 14, 44 18, 46 24 C 47 27, 50 28, 52 27 C 50 17, 42 8, 32 8 Z" />
+</svg>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AerozaGlyph } from "@/components/AerozaLogo";
 import { HeroLiveMap } from "@/components/HeroLiveMap";
 import { HeroVerificationCard } from "@/components/HeroVerificationCard";
 
@@ -56,8 +57,8 @@ const CALLOUTS: ReadonlyArray<{ label: string; href: string; primary?: boolean }
 export default function LandingPage() {
   return (
     <main className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-[1400px] flex-col gap-16 px-6 py-12">
-      <Hero />
       <Pitch />
+      <LiveDemo />
       <Features />
       <BottomCta />
       <Footer />
@@ -66,30 +67,19 @@ export default function LandingPage() {
 }
 
 /**
- * The new hero: an embedded live AlertsMap on the left and the
- * "were-we-right?" calibration card on the right. Together they tell
- * both halves of the pitch — *real, live data* + *we prove we're right* —
- * within five seconds of page load, without a single API path being
- * read. Stacks on small screens; the map drops to 60% / 40% on lg+.
- */
-function Hero() {
-  return (
-    <section className="grid grid-cols-1 gap-5 lg:grid-cols-[3fr_2fr]">
-      <HeroLiveMap />
-      <HeroVerificationCard />
-    </section>
-  );
-}
-
-/**
- * The text pitch + CTAs. Sits below the live demo so the map has the
- * first impression; the headline is here for context-setting and SEO.
- * Pulled out of the old Hero so the live demo can dominate above the
- * fold.
+ * The text pitch + CTAs, sits above the fold. The brass hook-echo
+ * glyph anchors the brand at logo-scale (44px) and reinforces the
+ * weather-instrument register the wordmark in SiteNav establishes at
+ * 16px. Headline → subhead → CTAs flows the way a deck slide reads.
  */
 function Pitch() {
   return (
     <section className="flex flex-col items-start gap-5">
+      <AerozaGlyph
+        size={44}
+        title="Aeroza"
+        className="text-accent"
+      />
       <h1 className="max-w-3xl font-display text-4xl font-semibold tracking-tight text-text sm:text-5xl">
         {HERO_TAGLINE}
       </h1>
@@ -101,6 +91,23 @@ function Pitch() {
           <CallToAction key={cta.href} {...cta} />
         ))}
       </div>
+    </section>
+  );
+}
+
+/**
+ * The live demo strip: embedded AlertsMap on the left + "were we right?"
+ * calibration card on the right. Same content as the original above-the-
+ * fold hero — moved below the Pitch so visitors get the framing first
+ * (what is this?) and then the proof (look, it's running). The 60/40
+ * split keeps the map visually dominant within this section while the
+ * card balances it with the verification story.
+ */
+function LiveDemo() {
+  return (
+    <section className="grid grid-cols-1 gap-5 lg:grid-cols-[3fr_2fr]">
+      <HeroLiveMap />
+      <HeroVerificationCard />
     </section>
   );
 }
