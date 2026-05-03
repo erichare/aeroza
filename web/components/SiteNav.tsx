@@ -8,6 +8,7 @@ import { PulseStrip } from "./PulseStrip";
 const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/", label: "Home" },
   { href: "/map", label: "Map" },
+  { href: "/demo", label: "Replay" },
   { href: "/calibration", label: "Calibration" },
   { href: "/console", label: "Console" },
   { href: "/docs", label: "Docs" },
@@ -19,7 +20,7 @@ const GITHUB_URL = "https://github.com/erichare/aeroza";
 // already have their own richer status header. /map's page-level strip
 // shows alerts, freshness, and severity counts in much more detail; a
 // duplicate three-pill summary above it would be visual noise.
-const PULSE_STRIP_SUPPRESS: ReadonlySet<string> = new Set(["/map"]);
+const PULSE_STRIP_SUPPRESS: ReadonlySet<string> = new Set(["/map", "/demo"]);
 
 /**
  * Top-of-page nav, shared across the whole site (landing, console, docs).
