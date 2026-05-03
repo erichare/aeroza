@@ -1,30 +1,39 @@
 """Pure scoring functions for verification.
 
-I/O-free, side-effect-free. Given two equally-shaped numpy arrays
-(forecast vs observation), compute the deterministic-forecast metrics
-the ``nowcast_verifications`` table records:
+I/O-free, side-effect-free. Given equally-shaped numpy arrays the
+verifier passes in (forecast vs observation, or an ensemble vs an
+observation), compute the metrics the ``nowcast_verifications`` table
+records:
 
-- **MAE / bias / RMSE** — continuous-value error metrics.
+- **MAE / bias / RMSE** — continuous-value error metrics for a
+  deterministic forecast.
 - **Contingency-table counts** for a dBZ threshold — hits, misses,
   false alarms, correct negatives. From these the calibration
   aggregator computes the standard categorical-skill scores
   Probability of Detection (POD), False Alarm Ratio (FAR), and
   Critical Success Index (CSI).
+- **Brier score** — the mean squared error of an event-probability
+  forecast against a {0,1} truth. The probabilistic complement of
+  POD/FAR/CSI: tells you "when the ensemble said 30%, did the event
+  happen 30% of the time?"
+- **CRPS** — the Continuous Ranked Probability Score. The
+  generalisation of MAE to a full ensemble distribution; rewards a
+  forecast whose CDF is close to the observation everywhere on the
+  real line. Lower is better; equals MAE for a deterministic forecast.
 
-Why both: continuous metrics tell you "how far off, on average?", but
-categorical metrics tell you "did we get the threshold crossing
-right?" — which is what every operational user actually cares about
-("did the storm cell over Houston exceed 35 dBZ at 30 minutes out?").
+Why both deterministic and probabilistic: continuous metrics tell
+you "how far off, on average?", and categorical metrics tell you
+"did we get the threshold crossing right?". Probabilistic metrics
+tell you "is the *uncertainty* honest?" — the third leg of skill
+scoring, and the one that's only meaningful once a forecaster emits
+ensembles.
 
-Brier / reliability / CRPS need probabilistic forecasts (ensemble
-outputs). They land alongside ensemble pySTEPS / NowcastNet later;
-the schema column for them is the next addition this module will
-grow.
-
-NaN handling: any cell that's NaN in either array is excluded from
-the sample count (and from the metrics). MRMS occasionally publishes
-grids with masked-out cells — those should not pull MAE toward zero
-or pollute the contingency table.
+NaN handling: any cell where the observation is NaN is excluded from
+the sample count for every metric. For ensemble metrics, any cell
+where any member is NaN is also excluded — Brier / CRPS aren't
+defined when the forecast distribution itself is partially missing.
+MRMS occasionally publishes grids with masked-out cells; those should
+not pull metrics toward zero or pollute the contingency table.
 """
 
 from __future__ import annotations
@@ -136,6 +145,177 @@ def score_deterministic_grids(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ProbabilisticMetrics:
+    """One verification's worth of ensemble-forecast scoring.
+
+    Computed against an ensemble of M members and one observation;
+    only meaningful when M > 1 (M=1 collapses to deterministic and
+    Brier=0/CRPS=MAE, which the calibration aggregator already
+    captures via the deterministic columns).
+
+    ``brier_score`` is the mean over valid cells of
+    ``(p - event)^2`` where ``p`` is the empirical event probability
+    over the ensemble for the chosen ``threshold_dbz`` and ``event``
+    is the {0,1} indicator from the observation. Range [0, 1]; 0 is
+    perfect.
+
+    ``crps`` is the per-cell mean of the fair (unbiased) ensemble
+    CRPS estimator (see :func:`crps_ensemble`). Same units as the
+    forecast variable (dBZ for reflectivity); 0 is perfect.
+
+    ``ensemble_size`` is the M passed in — recorded so the calibration
+    aggregator can flag mixed-M buckets without re-reading the Zarr.
+    """
+
+    brier_score: float
+    crps: float
+    ensemble_size: int
+    sample_count: int
+    threshold_dbz: float
+
+
+def brier_score(probabilities: np.ndarray, observed_events: np.ndarray) -> float:
+    """Mean squared error of probabilistic forecast vs {0,1} truth.
+
+    ``probabilities`` and ``observed_events`` must be the same shape;
+    cells where either is NaN are excluded. ``observed_events`` is
+    expected to hold {0, 1} (or boolean). Returns 0.0 when no cells
+    contribute — caller should detect "no data" via the sample count
+    rather than the score itself.
+    """
+    if probabilities.shape != observed_events.shape:
+        raise ValueError(
+            f"shape mismatch: probabilities {probabilities.shape} "
+            f"vs observed_events {observed_events.shape}"
+        )
+    valid = np.isfinite(probabilities) & np.isfinite(observed_events)
+    if not bool(valid.any()):
+        return 0.0
+    p = probabilities[valid].astype(np.float64)
+    o = observed_events[valid].astype(np.float64)
+    return float(np.mean((p - o) ** 2))
+
+
+def crps_ensemble(members: np.ndarray, observations: np.ndarray) -> tuple[float, int]:
+    """Fair (unbiased) ensemble Continuous Ranked Probability Score.
+
+    Implements the standard estimator
+    ``CRPS = (1/M) Σ |x_i - y| - (1/(2 M (M-1))) Σ_i Σ_j |x_i - x_j|``
+    per cell, then averages over valid cells. The factor ``1/(M-1)``
+    (instead of ``1/M``) makes the estimator unbiased for finite M —
+    Ferro (2014), Zamo & Naveau (2018). Falls back to MAE when M=1
+    (the second term is 0) so the function is safe for the
+    deterministic edge case.
+
+    ``members`` shape: ``(M, *spatial)``. ``observations`` shape:
+    ``spatial``. A cell counts as valid only when the observation and
+    every member at that cell are finite — Brier / CRPS are not
+    defined when part of the forecast distribution is missing.
+
+    Returns ``(crps_mean, sample_count)`` so the caller can treat
+    "no data" as ``sample_count == 0`` without inspecting the score.
+    """
+    if members.ndim < 1:
+        raise ValueError("members must have at least one dimension")
+    n_members = members.shape[0]
+    if members.shape[1:] != observations.shape:
+        raise ValueError(
+            f"shape mismatch: members spatial {members.shape[1:]} "
+            f"vs observations {observations.shape}"
+        )
+
+    obs_finite = np.isfinite(observations)
+    members_finite = np.all(np.isfinite(members), axis=0)
+    valid = obs_finite & members_finite
+    sample_count = int(valid.sum())
+    if sample_count == 0:
+        return 0.0, 0
+
+    # Flatten the spatial dims; vectorise over the M members.
+    flat_members = members.reshape(n_members, -1)[:, valid.ravel()].astype(np.float64)
+    flat_obs = observations.ravel()[valid.ravel()].astype(np.float64)
+
+    # First term: mean over members of |x_i - y|, per cell.
+    abs_err = np.mean(np.abs(flat_members - flat_obs[np.newaxis, :]), axis=0)
+
+    # Second term: spread term, computed per cell from the sorted
+    # ensemble. For sorted x_(1) ≤ … ≤ x_(M):
+    #   Σ_i Σ_j |x_i - x_j| = 2 Σ_k (2k - M - 1) x_(k)   (k starts at 1).
+    # That's O(M log M) per cell instead of O(M^2).
+    spread: float | np.ndarray
+    if n_members < 2:
+        spread = 0.0
+    else:
+        sorted_members = np.sort(flat_members, axis=0)
+        k = np.arange(1, n_members + 1, dtype=np.float64)[:, np.newaxis]
+        weighted = (2.0 * k - n_members - 1.0) * sorted_members
+        spread = np.sum(weighted, axis=0) / (n_members * (n_members - 1))
+
+    crps_per_cell = abs_err - spread
+    return float(np.mean(crps_per_cell)), sample_count
+
+
+def score_probabilistic_grids(
+    members: np.ndarray,
+    observation: np.ndarray,
+    *,
+    threshold_dbz: float = DEFAULT_THRESHOLD_DBZ,
+) -> ProbabilisticMetrics:
+    """Compute Brier score + CRPS for an ensemble forecast.
+
+    ``members`` shape: ``(M, y, x)``. ``observation`` shape: ``(y, x)``.
+    Brier is computed against the binary event ``observation >=
+    threshold_dbz``; the forecast probability is the fraction of
+    members at-or-above the threshold. CRPS is the fair ensemble
+    estimator; same threshold is recorded but doesn't enter CRPS
+    itself (CRPS scores the whole distribution, not just the
+    threshold crossing).
+
+    ``sample_count`` is the cell count where the observation and
+    every member were finite — both Brier and CRPS use the same valid
+    mask so a single number suffices.
+    """
+    if members.ndim < 1:
+        raise ValueError("members must have at least one dimension")
+    n_members = int(members.shape[0])
+    if members.shape[1:] != observation.shape:
+        raise ValueError(
+            f"shape mismatch: members spatial {members.shape[1:]} "
+            f"vs observation {observation.shape}"
+        )
+
+    obs_finite = np.isfinite(observation)
+    members_finite = np.all(np.isfinite(members), axis=0)
+    valid = obs_finite & members_finite
+    sample_count = int(valid.sum())
+    if sample_count == 0:
+        return ProbabilisticMetrics(
+            brier_score=0.0,
+            crps=0.0,
+            ensemble_size=n_members,
+            sample_count=0,
+            threshold_dbz=threshold_dbz,
+        )
+
+    member_events = (members >= threshold_dbz).astype(np.float64)
+    probabilities = np.mean(member_events, axis=0)
+    observed_events = (observation >= threshold_dbz).astype(np.float64)
+    # NaN-mask valid cells in via the observation finiteness so the
+    # downstream ``brier_score`` helper agrees with ``sample_count``.
+    probabilities = np.where(valid, probabilities, np.nan)
+    observed_events = np.where(valid, observed_events, np.nan)
+
+    crps_mean, _ = crps_ensemble(members, observation)
+    return ProbabilisticMetrics(
+        brier_score=brier_score(probabilities, observed_events),
+        crps=crps_mean,
+        ensemble_size=n_members,
+        sample_count=sample_count,
+        threshold_dbz=threshold_dbz,
+    )
+
+
 def pod(hits: int, misses: int) -> float | None:
     """Probability of Detection: fraction of observed events caught.
 
@@ -171,8 +351,12 @@ def csi(hits: int, misses: int, false_alarms: int) -> float | None:
 __all__ = [
     "DEFAULT_THRESHOLD_DBZ",
     "DeterministicMetrics",
+    "ProbabilisticMetrics",
+    "brier_score",
+    "crps_ensemble",
     "csi",
     "far",
     "pod",
     "score_deterministic_grids",
+    "score_probabilistic_grids",
 ]

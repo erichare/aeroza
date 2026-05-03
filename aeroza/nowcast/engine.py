@@ -45,14 +45,25 @@ PERSISTENCE_ALGORITHM: Final[str] = "persistence"
 class NowcastPrediction:
     """One forecast at one horizon.
 
-    ``data`` is the predicted DataArray — same shape / coords as the
-    observation. ``valid_at`` is the wall-clock time this prediction
-    is for (observation valid_at + horizon).
+    ``data`` is the predicted DataArray. For a deterministic
+    forecaster (``ensemble_size == 1``) it has the same shape / coords
+    as the observation. For an ensemble (``ensemble_size > 1``) it
+    has a leading ``member`` dim of length ``ensemble_size`` —
+    members are stacked oldest-or-by-index-first along that axis.
+
+    ``valid_at`` is the wall-clock time this prediction is for
+    (observation valid_at + horizon).
+
+    The worker persists ``ensemble_size`` on the row so the verifier
+    knows whether to score deterministic-only metrics (MAE/POD/etc.)
+    or also probabilistic metrics (Brier/CRPS). Default 1 keeps the
+    deterministic forecasters' construction call sites unchanged.
     """
 
     horizon_minutes: int
     valid_at: datetime
     data: xr.DataArray
+    ensemble_size: int = 1
 
 
 class Forecaster(Protocol):
@@ -65,6 +76,16 @@ class Forecaster(Protocol):
     @property
     def algorithm(self) -> str:  # pragma: no cover - interface
         """Tag persisted on every produced row (e.g. ``"persistence"``)."""
+        ...
+
+    @property
+    def history_depth(self) -> int:  # pragma: no cover - interface
+        """Number of past observations the worker should fetch alongside
+        the current one. ``1`` means "no history needed" (persistence);
+        optical-flow forecasters want their lookback; lagged ensembles
+        want one frame per member. Defaults are conservative — over-
+        fetching is one extra Zarr open per skipped frame, no big deal.
+        """
         ...
 
     async def forecast(
@@ -101,6 +122,11 @@ class PersistenceForecaster:
     @property
     def algorithm(self) -> str:
         return PERSISTENCE_ALGORITHM
+
+    @property
+    def history_depth(self) -> int:
+        # Persistence ignores past frames; ask for none.
+        return 1
 
     async def forecast(
         self,

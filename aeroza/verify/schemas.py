@@ -25,6 +25,14 @@ class CalibrationRow(BaseModel):
     the same as the ratio of averages). They're nullable: when no
     contributing row had categorical metrics or the threshold was
     mixed, we surface ``null`` rather than a misleading 0.
+
+    Probabilistic fields (``brierMean``, ``crpsMean``,
+    ``ensembleSize``) are populated only when at least one ensemble
+    nowcast contributed to the bucket. ``brierMean`` and ``crpsMean``
+    are sample-weighted across only the ensemble rows, so a bucket
+    that mixes deterministic and ensemble forecasts surfaces an
+    apples-to-apples Brier/CRPS for the ensemble subset (with
+    ``brierSampleCount`` reporting the cell count behind it).
     """
 
     model_config = ConfigDict(populate_by_name=True, frozen=True)
@@ -40,6 +48,10 @@ class CalibrationRow(BaseModel):
     pod: float | None = None
     far: float | None = None
     csi: float | None = None
+    ensemble_size: int | None = Field(default=None, serialization_alias="ensembleSize")
+    brier_sample_count: int = Field(default=0, serialization_alias="brierSampleCount")
+    brier_mean: float | None = Field(default=None, serialization_alias="brierMean")
+    crps_mean: float | None = Field(default=None, serialization_alias="crpsMean")
 
 
 class CalibrationResponse(BaseModel):
@@ -75,6 +87,10 @@ def calibration_buckets_to_response(
                 pod=pod(b.hits_total, b.misses_total),
                 far=far(b.hits_total, b.false_alarms_total),
                 csi=csi(b.hits_total, b.misses_total, b.false_alarms_total),
+                ensemble_size=b.ensemble_size,
+                brier_sample_count=b.brier_sample_count,
+                brier_mean=b.brier_mean,
+                crps_mean=b.crps_mean,
             )
             for b in buckets
         ],
@@ -96,6 +112,10 @@ class CalibrationSeriesItemPoint(BaseModel):
     pod: float | None = None
     far: float | None = None
     csi: float | None = None
+    ensemble_size: int | None = Field(default=None, serialization_alias="ensembleSize")
+    brier_sample_count: int = Field(default=0, serialization_alias="brierSampleCount")
+    brier_mean: float | None = Field(default=None, serialization_alias="brierMean")
+    crps_mean: float | None = Field(default=None, serialization_alias="crpsMean")
 
 
 class CalibrationSeriesItem(BaseModel):
@@ -166,6 +186,10 @@ def calibration_points_to_series(
                 pod=pod(p.hits_total, p.misses_total),
                 far=far(p.hits_total, p.false_alarms_total),
                 csi=csi(p.hits_total, p.misses_total, p.false_alarms_total),
+                ensemble_size=p.ensemble_size,
+                brier_sample_count=p.brier_sample_count,
+                brier_mean=p.brier_mean,
+                crps_mean=p.crps_mean,
             )
         )
     if current_key is not None:

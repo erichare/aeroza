@@ -13,10 +13,14 @@ import pytest
 from aeroza.verify.metrics import (
     DEFAULT_THRESHOLD_DBZ,
     DeterministicMetrics,
+    ProbabilisticMetrics,
+    brier_score,
+    crps_ensemble,
     csi,
     far,
     pod,
     score_deterministic_grids,
+    score_probabilistic_grids,
 )
 
 pytestmark = pytest.mark.unit
@@ -169,3 +173,140 @@ def test_categorical_skips_nan_cells() -> None:
     assert metrics.hits == 1
     assert metrics.correct_negatives == 1
     assert metrics.misses == metrics.false_alarms == 0
+
+
+# --------------------------------------------------------------------------- #
+# Probabilistic — Brier + CRPS over an ensemble                               #
+# --------------------------------------------------------------------------- #
+
+
+def test_brier_perfect_certainty_scores_zero() -> None:
+    probs = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    events = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    assert brier_score(probs, events) == 0.0
+
+
+def test_brier_constant_uncertainty_against_balanced_truth() -> None:
+    # 50% probability against half-events: per-cell error 0.25, mean 0.25.
+    probs = np.full(4, 0.5, dtype=np.float32)
+    events = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    assert brier_score(probs, events) == pytest.approx(0.25)
+
+
+def test_brier_skips_nan_cells() -> None:
+    probs = np.array([0.5, np.nan, 1.0], dtype=np.float32)
+    events = np.array([1.0, 0.0, 1.0], dtype=np.float32)
+    # Only cells 0 and 2 contribute: ((0.5-1)^2 + (1-1)^2) / 2 = 0.125.
+    assert brier_score(probs, events) == pytest.approx(0.125)
+
+
+def test_brier_shape_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="shape mismatch"):
+        brier_score(np.zeros(3), np.zeros(4))
+
+
+def test_crps_single_member_collapses_to_mae() -> None:
+    # M=1 zeros the spread term; CRPS reduces to MAE.
+    members = np.array([[1.0, 4.0, 9.0]], dtype=np.float32)  # shape (1, 3)
+    obs = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    crps_value, count = crps_ensemble(members, obs)
+    assert count == 3
+    # MAE = mean(|1|, |4|, |9|) = 14/3.
+    assert crps_value == pytest.approx(14.0 / 3.0)
+
+
+def test_crps_perfect_ensemble_at_truth_scores_zero() -> None:
+    members = np.full((5, 3), 7.0, dtype=np.float32)
+    obs = np.full(3, 7.0, dtype=np.float32)
+    crps_value, count = crps_ensemble(members, obs)
+    assert count == 3
+    assert crps_value == pytest.approx(0.0)
+
+
+def test_crps_known_two_member_value() -> None:
+    # Members {0, 2} for a single cell, observation 1.
+    # Fair CRPS = (1/M) Σ |x_i - y| - 1/(2 M (M-1)) Σ_i Σ_j |x_i - x_j|
+    # = (1/2)(1 + 1) - 1/(2*2*1) * (0 + 2 + 2 + 0)
+    # = 1 - 1 = 0.0
+    members = np.array([[0.0], [2.0]], dtype=np.float32)
+    obs = np.array([1.0], dtype=np.float32)
+    crps_value, count = crps_ensemble(members, obs)
+    assert count == 1
+    assert crps_value == pytest.approx(0.0)
+
+
+def test_crps_skips_cells_with_partial_member_nan() -> None:
+    members = np.array(
+        [
+            [1.0, np.nan, 3.0],
+            [2.0, 4.0, 4.0],
+        ],
+        dtype=np.float32,
+    )
+    obs = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    _, count = crps_ensemble(members, obs)
+    # Cell 1 has a NaN member → dropped. Two cells contribute.
+    assert count == 2
+
+
+def test_score_probabilistic_grids_records_threshold_and_sizes() -> None:
+    # 4 members, all above the threshold at one cell, all below at another.
+    # P(event) = 1.0 at cell 0, 0.0 at cell 1.
+    # Observation: cell 0 above threshold, cell 1 below.
+    members = np.array(
+        [
+            [40.0, 10.0],
+            [40.0, 10.0],
+            [40.0, 10.0],
+            [40.0, 10.0],
+        ],
+        dtype=np.float32,
+    )
+    obs = np.array([40.0, 10.0], dtype=np.float32)
+    metrics = score_probabilistic_grids(members, obs, threshold_dbz=35.0)
+    assert isinstance(metrics, ProbabilisticMetrics)
+    assert metrics.ensemble_size == 4
+    assert metrics.sample_count == 2
+    assert metrics.threshold_dbz == 35.0
+    assert metrics.brier_score == pytest.approx(0.0)
+    # CRPS for a perfect-certain ensemble at the truth is 0.
+    assert metrics.crps == pytest.approx(0.0)
+
+
+def test_score_probabilistic_grids_imperfect_brier() -> None:
+    # 2-member ensemble: one above, one below the threshold → P(event) = 0.5.
+    # One cell where event happened, one where it didn't.
+    members = np.array(
+        [
+            [40.0, 40.0],
+            [10.0, 10.0],
+        ],
+        dtype=np.float32,
+    )
+    obs = np.array([40.0, 10.0], dtype=np.float32)
+    metrics = score_probabilistic_grids(members, obs, threshold_dbz=35.0)
+    # Cell 0: (0.5 - 1.0)^2 = 0.25. Cell 1: (0.5 - 0.0)^2 = 0.25. Mean: 0.25.
+    assert metrics.brier_score == pytest.approx(0.25)
+    assert metrics.sample_count == 2
+
+
+def test_score_probabilistic_grids_all_nan_returns_zero_with_zero_samples() -> None:
+    members = np.full((3, 4), np.nan, dtype=np.float32)
+    obs = np.full(4, np.nan, dtype=np.float32)
+    metrics = score_probabilistic_grids(members, obs)
+    assert metrics.sample_count == 0
+    assert metrics.brier_score == 0.0
+    assert metrics.crps == 0.0
+    assert metrics.ensemble_size == 3
+
+
+def test_probabilistic_metrics_dataclass_is_frozen() -> None:
+    metrics = ProbabilisticMetrics(
+        brier_score=0.0,
+        crps=0.0,
+        ensemble_size=1,
+        sample_count=1,
+        threshold_dbz=35.0,
+    )
+    with pytest.raises(AttributeError):
+        metrics.brier_score = 1.0  # type: ignore[misc]

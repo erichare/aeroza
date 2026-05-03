@@ -81,13 +81,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--algorithm",
-        choices=["persistence", "pysteps"],
+        choices=["persistence", "pysteps", "lagged-ensemble"],
         default="persistence",
         help=(
             "Forecaster to run. 'persistence' (default) is the §7 baseline "
             "and pulls in zero extra deps. 'pysteps' runs Lucas–Kanade "
             "optical flow + semi-Lagrangian extrapolation; needs the "
-            "[nowcast] extra (`uv sync --extra nowcast`)."
+            "[nowcast] extra (`uv sync --extra nowcast`). "
+            "'lagged-ensemble' is the simplest probabilistic forecaster: "
+            "members are the last K observations, persisted forward. "
+            "Pulls in zero extra deps and unlocks Brier/CRPS scoring on "
+            "/v1/calibration."
+        ),
+    )
+    parser.add_argument(
+        "--ensemble-size",
+        type=int,
+        default=None,
+        help=(
+            "Number of ensemble members for probabilistic forecasters "
+            "(currently only 'lagged-ensemble'). Defaults to the "
+            "forecaster's own default (8 for lagged-ensemble). Ignored "
+            "for deterministic algorithms."
         ),
     )
     return parser
@@ -108,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
     db = create_engine_and_session(settings.database_url)
-    forecaster = _build_forecaster(args.algorithm)
+    forecaster = _build_forecaster(args.algorithm, ensemble_size=args.ensemble_size)
     try:
         if args.no_publish:
             # NATS-free path: still need the input subscriber, so keep
@@ -141,7 +156,7 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
         await db.dispose()
 
 
-def _build_forecaster(algorithm: str) -> Forecaster:
+def _build_forecaster(algorithm: str, *, ensemble_size: int | None = None) -> Forecaster:
     """Resolve the CLI ``--algorithm`` choice to a concrete forecaster."""
     if algorithm == "persistence":
         return PersistenceForecaster()
@@ -151,6 +166,16 @@ def _build_forecaster(algorithm: str) -> Forecaster:
         from aeroza.nowcast.pysteps_forecaster import PystepsForecaster
 
         return PystepsForecaster()
+    if algorithm == "lagged-ensemble":
+        from aeroza.nowcast.lagged_ensemble import (
+            DEFAULT_ENSEMBLE_SIZE,
+            LaggedEnsembleForecaster,
+        )
+
+        size = ensemble_size if ensemble_size is not None else DEFAULT_ENSEMBLE_SIZE
+        if size < 1:
+            raise ValueError(f"ensemble_size must be >= 1, got {size}")
+        return LaggedEnsembleForecaster(ensemble_size=size)
     raise ValueError(f"unknown algorithm: {algorithm!r}")
 
 

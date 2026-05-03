@@ -9,7 +9,7 @@ publisher receives one event per persisted row.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -217,6 +217,63 @@ async def test_observation_with_unreadable_zarr_skips_with_reason(
     assert result.persisted == ()
     assert result.skipped_reason is not None
     assert "read_failed" in result.skipped_reason
+
+
+async def test_lagged_ensemble_writes_member_dim_zarr_and_records_size(
+    integration_db: Database, tmp_path: Path
+) -> None:
+    """End-to-end drive of the lagged ensemble through the worker: with two
+    past observations seeded, the forecaster builds a 3-member ensemble,
+    the worker writes a (member, lat, lon) Zarr, and the row records
+    ``ensemble_size = 3``."""
+    from aeroza.nowcast.lagged_ensemble import (
+        LAGGED_ENSEMBLE_ALGORITHM,
+        LaggedEnsembleForecaster,
+    )
+
+    base_at = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    # Seed two earlier observations so the worker's `_load_history` finds
+    # them and the lagged ensemble builds a 3-member stack (2 past + current).
+    for offset, key, value in (
+        (-4, "CONUS/X/MRMS_X_115600.grib2.gz", 10.0),
+        (-2, "CONUS/X/MRMS_X_115800.grib2.gz", 20.0),
+    ):
+        await _seed_observation(
+            integration_db,
+            file_key=key,
+            zarr_uri=_write_obs_grid(tmp_path / f"past_{abs(offset)}.zarr", value=value),
+            valid_at=base_at + timedelta(minutes=offset),
+        )
+
+    obs_uri = _write_obs_grid(tmp_path / "obs.zarr", value=30.0)
+    grid_row, file_row = await _seed_observation(
+        integration_db,
+        file_key="CONUS/X/MRMS_X_120000.grib2.gz",
+        zarr_uri=obs_uri,
+        valid_at=base_at,
+    )
+
+    result = await nowcast_observation_grid(
+        db=integration_db,
+        forecaster=LaggedEnsembleForecaster(ensemble_size=3),
+        target_root=tmp_path,
+        source_grid=grid_row,
+        source_file=file_row,
+        horizons_minutes=(30,),
+    )
+    assert len(result.persisted) == 1
+    row = result.persisted[0]
+    assert row.algorithm == LAGGED_ENSEMBLE_ALGORITHM
+    assert row.ensemble_size == 3
+
+    forecast = xr.open_zarr(row.zarr_uri).reflectivity.load()
+    assert forecast.dims == ("member", "latitude", "longitude")
+    assert forecast.shape == (3, 3, 3)
+    # Members are oldest → newest: 10, 20, 30.
+    np.testing.assert_array_equal(
+        forecast.values[:, 0, 0].astype(np.float32),
+        np.array([10.0, 20.0, 30.0], dtype=np.float32),
+    )
 
 
 async def test_cascade_on_source_file_delete(integration_db: Database, tmp_path: Path) -> None:

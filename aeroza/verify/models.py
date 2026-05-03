@@ -66,6 +66,15 @@ class VerificationRow(Base):
     misses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     false_alarms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     correct_negatives: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Probabilistic metrics — populated when the source nowcast is an
+    # ensemble (``mrms_nowcasts.ensemble_size > 1``). NULL for any
+    # deterministic row so the aggregator can surface ``null`` to the
+    # API without inventing a misleading 0. ``ensemble_size`` mirrors
+    # the source row so the aggregator can detect mixed-M buckets
+    # without re-joining ``mrms_nowcasts``.
+    ensemble_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crps: Mapped[float | None] = mapped_column(Float, nullable=True)
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -80,6 +89,10 @@ class VerificationRow(Base):
         CheckConstraint(
             "hits >= 0 AND misses >= 0 AND false_alarms >= 0 AND correct_negatives >= 0",
             name="nowcast_verifications_contingency_nonneg",
+        ),
+        CheckConstraint(
+            "ensemble_size IS NULL OR ensemble_size >= 1",
+            name="nowcast_verifications_ensemble_size_positive",
         ),
         UniqueConstraint(
             "nowcast_id",

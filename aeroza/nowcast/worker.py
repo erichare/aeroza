@@ -48,11 +48,11 @@ from aeroza.stream.publisher import (
     NullNowcastGridPublisher,
 )
 
-# How many past observation grids to load alongside the current one.
-# Optical-flow forecasters (pySTEPS) need these; persistence ignores
-# them. 4 is a sensible upper bound — pySTEPS' Lucas–Kanade default
-# is 3, plus one in case the worker's tick races with the materialiser.
-HISTORY_DEPTH: int = 4
+# Default cap on past observation grids loaded alongside the current
+# one. Each forecaster declares its own ``history_depth`` via the
+# Protocol; the worker uses the larger of that and this floor so a
+# misconfigured forecaster doesn't accidentally starve itself.
+DEFAULT_HISTORY_DEPTH: int = 4
 
 log = structlog.get_logger(__name__)
 
@@ -109,7 +109,7 @@ async def nowcast_observation_grid(
         level=source_file.level,
         before=source_file.valid_at,
         skip_file_key=source_file.key,
-        n=HISTORY_DEPTH,
+        n=max(DEFAULT_HISTORY_DEPTH, forecaster.history_depth),
     )
 
     try:
@@ -202,6 +202,7 @@ async def _materialise_prediction(
             shape=locator.shape,
             dtype=locator.dtype,
             nbytes=locator.nbytes,
+            ensemble_size=prediction.ensemble_size,
         )
         await session.commit()
     return row

@@ -4,7 +4,7 @@ A history of what's shipped and a credible plan for what's next. Specific items 
 
 This file is the source of truth for "what state is the project in?" — the README links here, the dev console points users here, and PRs that close out a phase update this file alongside the code.
 
-## Shipped (phases 0 – 6d)
+## Shipped (phases 0 – 6f)
 
 ### Phase 0 — Scaffold
 
@@ -108,13 +108,25 @@ A run of post-Phase-5 work that turned a great-but-local product into something 
 - **Historical event seeding**. `aeroza-ingest-mrms --at-time` pulls any past 24 h slice from NOAA's bucket. Combined with /demo's "Copy seed command" UX and the materialiser's "N more files waiting; re-run with `--batch-size N`" hint, populating the radar replay for any catalogued event is a two-paste workflow.
 - **Friendlier errors**. Materialiser fast-fails at startup with a precise install hint when cfgrib is missing instead of grinding through every queued grid with a cryptic xarray error.
 
+### Phase 6f — ensemble plumbing + Brier / CRPS
+
+Probabilistic verification's ground floor. The `Forecaster` Protocol grew an `ensemble_size` field on `NowcastPrediction` and a per-forecaster `history_depth`; `mrms_nowcasts.ensemble_size` records the M each row's Zarr stores along its leading `member` dim, defaulting to 1 so the deterministic forecasters round-trip unchanged. A new `LaggedEnsembleForecaster` (`--algorithm lagged-ensemble`) is the simplest probabilistic baseline — members are the last K observations stacked along `member`, persisted forward — and pulls in zero extra deps so it runs on the default install.
+
+The verifier detects ensembles off the catalog row's `ensemble_size`, computes Brier and fair-CRPS over the member dim, and falls back to the member-mean for the existing MAE/POD path. `nowcast_verifications` gained nullable `brier_score` / `crps` / `ensemble_size` columns; the calibration aggregator surfaces sample-weighted `brierMean` / `crpsMean` / `ensembleSize` (null when no ensemble row contributed) on `/v1/calibration` and `/v1/calibration/series`. Both fields land in `@aeroza/sdk` types so the dev console can chart them next.
+
+This is the probabilistic complement to Phase 6b's categorical POD/FAR/CSI: the full skill triangle (continuous + categorical + probabilistic) now runs on every observation tick, with a baseline ensemble forecaster the upcoming STEPS / NowcastNet runs must beat on Brier skill.
+
 ## Up next (phase 6 continued)
 
 Workstreams roughly equal in priority. Reordering to taste; nothing is locked in.
 
-### Ensemble forecasting → Brier / CRPS
+### Ensemble forecasting follow-ons
 
-The next step on the *probabilistic* verification side is multi-member ensemble runs (pysteps' STEPS mode supports them out of the box). Ensemble output unlocks Brier scores, reliability diagrams, and CRPS — the proper probabilistic complement to the categorical POD/FAR/CSI scores Phase 6b ships. Goes hand-in-hand with a "champion / challenger" mechanism that calibrates new algorithms against persistence before promoting them.
+With the data plane in place, the remaining probabilistic-verification work is on the algorithm side and the UI:
+
+- **STEPS ensemble mode** (pysteps native): higher-quality members from real stochastic perturbations of the optical-flow extrapolation, instead of "the recent past" the lagged baseline uses. Drop-in once the forecaster is written — the verifier already handles any (M, y, x) Zarr.
+- **Reliability diagrams** on `/calibration`: bin the ensemble probabilities, plot observed frequency per bin. Needs a per-row JSONB column on `nowcast_verifications` (or a separate table) to retain bins for the aggregator.
+- **`/calibration` UI**: surface `brierMean`/`crpsMean` next to MAE in the metric switcher, plus a champion-vs-challenger view that highlights when an ensemble forecaster pulls ahead of the persistence baseline on Brier skill.
 
 ### Auth follow-ons
 

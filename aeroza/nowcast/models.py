@@ -50,6 +50,11 @@ class NowcastRow(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False)
     algorithm: Mapped[str] = mapped_column(String(64), nullable=False)
     forecast_horizon_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Number of ensemble members the prediction Zarr stores along its
+    # leading ``member`` dim. Defaults to 1 so deterministic forecasters
+    # (``persistence``, ``pysteps``) write rows that look like an
+    # ensemble of one — keeps the verifier's read path uniform.
+    ensemble_size: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     zarr_uri: Mapped[str] = mapped_column(Text, nullable=False)
     variable: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -67,6 +72,10 @@ class NowcastRow(Base):
         CheckConstraint(
             "forecast_horizon_minutes > 0",
             name="mrms_nowcasts_horizon_positive",
+        ),
+        CheckConstraint(
+            "ensemble_size >= 1",
+            name="mrms_nowcasts_ensemble_size_positive",
         ),
         UniqueConstraint(
             "source_file_key",
