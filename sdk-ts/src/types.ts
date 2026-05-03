@@ -250,11 +250,38 @@ export interface CalibrationItem {
   crpsMean: number | null;
 }
 
+/**
+ * One bin of a reliability diagram. `lower` is the inclusive lower
+ * edge of the forecast-probability bucket (`upper = lower + 1/N`).
+ * `observedFrequency` is the chart's y-coordinate — `null` when the
+ * bin is empty so the UI can skip the dot.
+ */
+export interface ReliabilityBin {
+  lower: number;
+  count: number;
+  observed: number;
+  meanProb: number;
+  observedFrequency: number | null;
+}
+
+/**
+ * Per-(algorithm × horizon) reliability diagram data. Surfaced as
+ * part of the `/v1/calibration` response so the UI can render the
+ * diagram alongside the matrix without a second fetch.
+ */
+export interface ReliabilityRow {
+  algorithm: string;
+  forecastHorizonMinutes: number;
+  bins: ReliabilityBin[];
+}
+
 export interface CalibrationResponse {
   type: "Calibration";
   generatedAt: string;
   windowHours: number;
   items: CalibrationItem[];
+  /** Empty when no ensemble row contributed to the window. */
+  reliability: ReliabilityRow[];
 }
 
 export interface CalibrationQuery {
@@ -449,4 +476,49 @@ export interface PolygonQuery {
   product?: string;
   level?: string;
   atTime?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Admin — seed historical events (gated by AEROZA_DEV_ADMIN_ENABLED)
+
+export type AdminSeedEventState = "running" | "succeeded" | "failed";
+
+/**
+ * Snapshot of a seed-event task as the admin endpoints expose it.
+ * `state` is derived server-side from `finishedAt`/`error` so callers
+ * don't have to compute it. The /demo "Seed this event" button polls
+ * `getSeedEventStatus` until `state` flips to a terminal value.
+ */
+export interface AdminSeedEventTask {
+  type: "AdminSeedEventTask";
+  since: string;
+  until: string;
+  product: string;
+  level: string;
+  startedAt: string;
+  finishedAt: string | null;
+  cfgribAvailable: boolean;
+  filesInserted: number;
+  filesUpdated: number;
+  gridsMaterialised: number;
+  error: string | null;
+  state: AdminSeedEventState;
+}
+
+export interface AdminSeedEventRequest {
+  /** ISO-8601 tz-aware lower bound (inclusive). */
+  since: string;
+  /** ISO-8601 tz-aware upper bound (exclusive). */
+  until: string;
+  /** Defaults to MergedReflectivityComposite. */
+  product?: string;
+  /** Defaults to "00.50". */
+  level?: string;
+}
+
+export interface AdminSeedEventStatusQuery {
+  since: string;
+  until: string;
+  product?: string;
+  level?: string;
 }

@@ -9,7 +9,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from aeroza.verify.metrics import csi, far, pod
-from aeroza.verify.store import CalibrationBucket, CalibrationSeriesPoint
+from aeroza.verify.store import (
+    CalibrationBucket,
+    CalibrationReliability,
+    CalibrationSeriesPoint,
+)
 
 
 class CalibrationRow(BaseModel):
@@ -54,6 +58,37 @@ class CalibrationRow(BaseModel):
     crps_mean: float | None = Field(default=None, serialization_alias="crpsMean")
 
 
+class ReliabilityBinResponse(BaseModel):
+    """One bin of a reliability diagram on the wire.
+
+    Mirrors :class:`aeroza.verify.metrics.ReliabilityBin` but uses
+    Pydantic so FastAPI can serialise it. ``lower`` is the inclusive
+    lower edge of the forecast-probability bucket; ``observedFrequency``
+    is the chart's y-coordinate (None when the bin is empty so the
+    UI can skip the dot rather than plot at the origin).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    lower: float
+    count: int
+    observed: int
+    mean_prob: float = Field(serialization_alias="meanProb")
+    observed_frequency: float | None = Field(serialization_alias="observedFrequency")
+
+
+class ReliabilityRow(BaseModel):
+    """Per-(algorithm × horizon) reliability data, attached to the
+    calibration response so the UI can render the diagram alongside
+    the matrix without a second fetch."""
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    algorithm: str
+    forecast_horizon_minutes: int = Field(serialization_alias="forecastHorizonMinutes")
+    bins: list[ReliabilityBinResponse]
+
+
 class CalibrationResponse(BaseModel):
     """Wire shape for ``GET /v1/calibration``."""
 
@@ -63,6 +98,30 @@ class CalibrationResponse(BaseModel):
     generated_at: datetime = Field(serialization_alias="generatedAt")
     window_hours: int = Field(serialization_alias="windowHours")
     items: list[CalibrationRow]
+    # Reliability rows for every (algorithm, horizon) with ensemble
+    # data in the window. Empty list when no ensemble row contributed
+    # — the UI hides the diagram in that case rather than plotting an
+    # empty diagonal.
+    reliability: list[ReliabilityRow] = []
+
+
+def _to_reliability_row(rel: CalibrationReliability) -> ReliabilityRow:
+    return ReliabilityRow(
+        algorithm=rel.algorithm,
+        forecast_horizon_minutes=rel.forecast_horizon_minutes,
+        bins=[
+            ReliabilityBinResponse(
+                lower=b.lower,
+                count=b.count,
+                observed=b.observed,
+                mean_prob=b.mean_prob,
+                # y-coord of the diagram dot; None for empty bins so
+                # the UI can skip them rather than plot at zero.
+                observed_frequency=(b.observed / b.count) if b.count > 0 else None,
+            )
+            for b in rel.bins
+        ],
+    )
 
 
 def calibration_buckets_to_response(
@@ -70,6 +129,7 @@ def calibration_buckets_to_response(
     *,
     generated_at: datetime,
     window_hours: int,
+    reliability: Sequence[CalibrationReliability] = (),
 ) -> CalibrationResponse:
     return CalibrationResponse(
         generated_at=generated_at,
@@ -94,6 +154,7 @@ def calibration_buckets_to_response(
             )
             for b in buckets
         ],
+        reliability=[_to_reliability_row(r) for r in reliability],
     )
 
 
@@ -214,6 +275,8 @@ __all__ = [
     "CalibrationSeriesItem",
     "CalibrationSeriesItemPoint",
     "CalibrationSeriesResponse",
+    "ReliabilityBinResponse",
+    "ReliabilityRow",
     "calibration_buckets_to_response",
     "calibration_points_to_series",
 ]

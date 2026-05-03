@@ -13,7 +13,12 @@ from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aeroza.verify.metrics import DeterministicMetrics, ProbabilisticMetrics
+from aeroza.verify.metrics import (
+    RELIABILITY_BIN_COUNT,
+    DeterministicMetrics,
+    ProbabilisticMetrics,
+    ReliabilityBin,
+)
 from aeroza.verify.models import VerificationRow
 
 log = structlog.get_logger(__name__)
@@ -33,6 +38,7 @@ _MUTABLE_COLUMNS: Final[tuple[str, ...]] = (
     "ensemble_size",
     "brier_score",
     "crps",
+    "reliability_bins",
 )
 
 
@@ -81,6 +87,22 @@ async def upsert_verification(
         "ensemble_size": probabilistic.ensemble_size if probabilistic is not None else None,
         "brier_score": probabilistic.brier_score if probabilistic is not None else None,
         "crps": probabilistic.crps if probabilistic is not None else None,
+        # Serialise the bin tuple to a list-of-dicts so JSONB stores
+        # something self-describing — the aggregator + the route
+        # layer can read it without re-importing the dataclass.
+        "reliability_bins": (
+            [
+                {
+                    "lower": b.lower,
+                    "count": b.count,
+                    "observed": b.observed,
+                    "mean_prob": b.mean_prob,
+                }
+                for b in probabilistic.reliability_bins
+            ]
+            if probabilistic is not None and probabilistic.reliability_bins
+            else None
+        ),
     }
     insert_stmt = pg_insert(VerificationRow).values(row)
     update_set: dict[str, Any] = {col: insert_stmt.excluded[col] for col in _MUTABLE_COLUMNS}
@@ -473,12 +495,132 @@ async def aggregate_calibration_series(
     return tuple(points)
 
 
+# --------------------------------------------------------------------------- #
+# Reliability-diagram aggregation                                             #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationReliability:
+    """Summed reliability histogram for one (algorithm, horizon) over a window.
+
+    The shape mirrors the per-row :class:`ReliabilityBin` tuple — same
+    ``RELIABILITY_BIN_COUNT`` slots, but the counts are summed across
+    every row in the bucket and ``mean_prob`` is recomputed as a
+    weighted mean over per-row counts. Empty bins (count=0) are kept
+    in the tuple so the wire shape stays fixed-length.
+    """
+
+    algorithm: str
+    forecast_horizon_minutes: int
+    bins: tuple[ReliabilityBin, ...]
+
+
+async def aggregate_calibration_reliability(
+    session: AsyncSession,
+    *,
+    since: datetime | None = None,
+    product: str | None = None,
+    level: str | None = None,
+    algorithm: str | None = None,
+    window_hours: int = DEFAULT_AGGREGATE_WINDOW_HOURS,
+) -> Sequence[CalibrationReliability]:
+    """Sum each row's reliability histogram by (algorithm, horizon).
+
+    The per-row histogram is JSONB-encoded; we fetch the raw rows and
+    sum bin-by-bin in Python. Postgres-side aggregation would need a
+    lateral ``jsonb_array_elements`` + per-bin GROUP BY, which is more
+    plumbing than the win — we're talking a few hundred rows in the
+    typical 24h window.
+
+    Returns one :class:`CalibrationReliability` per group with at
+    least one ensemble row in the window. Groups with no
+    ``reliability_bins`` data are omitted; the route layer surfaces
+    that as ``null`` in the response.
+    """
+    if since is None:
+        since = datetime.now().astimezone() - timedelta(hours=window_hours)
+
+    stmt = (
+        select(
+            VerificationRow.algorithm,
+            VerificationRow.forecast_horizon_minutes,
+            VerificationRow.reliability_bins,
+        )
+        .where(VerificationRow.verified_at >= since)
+        .where(VerificationRow.reliability_bins.is_not(None))
+    )
+    if product is not None:
+        stmt = stmt.where(VerificationRow.product == product)
+    if level is not None:
+        stmt = stmt.where(VerificationRow.level == level)
+    if algorithm is not None:
+        stmt = stmt.where(VerificationRow.algorithm == algorithm)
+
+    result = await session.execute(stmt)
+
+    # Per-(algorithm, horizon) accumulators. Each bin is a triple of
+    # ints (count, observed, weighted-prob-numerator); ``mean_prob``
+    # is computed at the end as the weighted-prob-numerator / count.
+    accum: dict[tuple[str, int], list[tuple[int, int, float]]] = {}
+    for row in result:
+        algo: str = row[0]
+        horizon: int = int(row[1])
+        bins_payload: list[dict[str, Any]] | None = row[2]
+        if bins_payload is None:
+            continue
+        key = (algo, horizon)
+        if key not in accum:
+            accum[key] = [(0, 0, 0.0)] * RELIABILITY_BIN_COUNT
+        # Defensive against rows whose bin count differs from the
+        # current schema constant — pad / truncate. Aggregator
+        # expectations remain fixed-length.
+        for i in range(RELIABILITY_BIN_COUNT):
+            entry = bins_payload[i] if i < len(bins_payload) else None
+            if entry is None:
+                continue
+            count = int(entry.get("count") or 0)
+            observed = int(entry.get("observed") or 0)
+            mean_prob = float(entry.get("mean_prob") or 0.0)
+            prev_count, prev_observed, prev_weighted = accum[key][i]
+            accum[key][i] = (
+                prev_count + count,
+                prev_observed + observed,
+                # Weighted by per-row count so the eventual mean is
+                # cell-weighted, not row-weighted.
+                prev_weighted + mean_prob * count,
+            )
+
+    edges = [i / RELIABILITY_BIN_COUNT for i in range(RELIABILITY_BIN_COUNT)]
+    out: list[CalibrationReliability] = []
+    for (algo, horizon), bins in sorted(accum.items()):
+        bin_objs = tuple(
+            ReliabilityBin(
+                lower=edges[i],
+                count=bins[i][0],
+                observed=bins[i][1],
+                mean_prob=(bins[i][2] / bins[i][0]) if bins[i][0] > 0 else 0.0,
+            )
+            for i in range(RELIABILITY_BIN_COUNT)
+        )
+        out.append(
+            CalibrationReliability(
+                algorithm=algo,
+                forecast_horizon_minutes=horizon,
+                bins=bin_objs,
+            )
+        )
+    return tuple(out)
+
+
 __all__ = [
     "DEFAULT_AGGREGATE_WINDOW_HOURS",
     "DEFAULT_BUCKET_SECONDS",
     "CalibrationBucket",
+    "CalibrationReliability",
     "CalibrationSeriesPoint",
     "aggregate_calibration",
+    "aggregate_calibration_reliability",
     "aggregate_calibration_series",
     "upsert_verification",
 ]

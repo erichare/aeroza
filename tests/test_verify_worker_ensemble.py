@@ -383,3 +383,107 @@ async def test_calibration_series_carries_ensemble_metrics(
     assert point.ensemble_size == 4
     assert point.brier_mean == pytest.approx(0.25)
     assert point.crps_mean == pytest.approx(5.0)
+
+
+async def test_calibration_reliability_bins_summed_across_rows(
+    integration_db: Database, tmp_path: Path
+) -> None:
+    """End-to-end: an ensemble verification writes a 10-bin histogram
+    to JSONB; the reliability aggregator reads that back and groups
+    by (algorithm, horizon). The 4-member ensemble produces P=0.5 on
+    every cell against an obs that crosses the threshold, so the
+    0.5–0.6 bin gets count=9, observed=9 and the rest are empty."""
+    from aeroza.verify.store import aggregate_calibration_reliability
+
+    obs_at = datetime(2026, 5, 1, 12, 30, tzinfo=UTC)
+    await _seed_file(integration_db, key="src", valid_at=obs_at - timedelta(minutes=30))
+
+    # Half the members above threshold, observation everywhere above
+    # → P=0.5 every cell, observed=1 every cell.
+    forecast_uri = _write_ensemble_grid(
+        tmp_path / "fc.zarr",
+        member_values=[40.0, 40.0, 10.0, 10.0],
+    )
+    await _seed_ensemble_nowcast(
+        integration_db,
+        source_file_key="src",
+        valid_at=obs_at,
+        horizon_minutes=30,
+        zarr_uri=forecast_uri,
+        ensemble_size=4,
+    )
+
+    obs_uri = _write_observation_grid(tmp_path / "obs.zarr", value=40.0)
+    grid_row, file_row = await _seed_observation_grid(
+        integration_db, file_key="obs", valid_at=obs_at, zarr_uri=obs_uri
+    )
+
+    await verify_observation(
+        db=integration_db, observation_grid=grid_row, observation_file=file_row
+    )
+
+    async with integration_db.sessionmaker() as session:
+        rows = await aggregate_calibration_reliability(
+            session,
+            since=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+            window_hours=72,
+        )
+    ensemble_rows = [r for r in rows if r.algorithm == LAGGED_ENSEMBLE_ALGORITHM]
+    assert len(ensemble_rows) == 1
+    row = ensemble_rows[0]
+    assert len(row.bins) == 10
+    bin_05 = next(b for b in row.bins if abs(b.lower - 0.5) < 1e-6)
+    assert bin_05.count == 9
+    assert bin_05.observed == 9
+    assert bin_05.mean_prob == pytest.approx(0.5)
+    # Other bins empty.
+    for bin_ in row.bins:
+        if abs(bin_.lower - 0.5) < 1e-6:
+            continue
+        assert bin_.count == 0
+
+
+async def test_calibration_reliability_skipped_when_no_ensemble_rows(
+    integration_db: Database, tmp_path: Path
+) -> None:
+    """Deterministic-only window → reliability aggregator returns no rows."""
+    from aeroza.nowcast.engine import PERSISTENCE_ALGORITHM
+    from aeroza.verify.store import aggregate_calibration_reliability
+
+    obs_at = datetime(2026, 5, 1, 12, 30, tzinfo=UTC)
+    await _seed_file(integration_db, key="src", valid_at=obs_at - timedelta(minutes=30))
+
+    forecast_uri = _write_observation_grid(tmp_path / "fc.zarr", value=40.0)
+    async with integration_db.sessionmaker() as session:
+        await upsert_nowcast(
+            session,
+            source_file_key="src",
+            product="MergedReflectivityComposite",
+            level="00.50",
+            algorithm=PERSISTENCE_ALGORITHM,
+            horizon_minutes=30,
+            valid_at=obs_at,
+            zarr_uri=forecast_uri,
+            variable="reflectivity",
+            dims=("latitude", "longitude"),
+            shape=(3, 3),
+            dtype="float32",
+            nbytes=36,
+        )
+        await session.commit()
+
+    obs_uri = _write_observation_grid(tmp_path / "obs.zarr", value=40.0)
+    grid_row, file_row = await _seed_observation_grid(
+        integration_db, file_key="obs", valid_at=obs_at, zarr_uri=obs_uri
+    )
+    await verify_observation(
+        db=integration_db, observation_grid=grid_row, observation_file=file_row
+    )
+
+    async with integration_db.sessionmaker() as session:
+        rows = await aggregate_calibration_reliability(
+            session,
+            since=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+            window_hours=72,
+        )
+    assert rows == ()

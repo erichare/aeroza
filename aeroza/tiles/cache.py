@@ -45,18 +45,26 @@ DEFAULT_MAX_BYTES: Final[int] = 200 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class CacheKey:
-    """Identity for a cached tile PNG.
+    """Identity for a cached tile.
 
-    ``file_key`` pins the source grid; ``z, x, y`` pin the tile coords.
-    A live-mode tile (no ``file_key``) deliberately can't be expressed
-    as a CacheKey — the cache module *only* speaks about pinned
-    tiles, so the type system pushes that invariant up to the caller.
+    ``file_key`` pins the source grid; ``z, x, y`` pin the tile coords;
+    ``format`` keeps PNG and WebP responses in distinct cache slots
+    so a request for ``image/webp`` doesn't accidentally serve PNG
+    bytes (or vice versa). A live-mode tile (no ``file_key``)
+    deliberately can't be expressed as a CacheKey — the cache module
+    *only* speaks about pinned tiles, so the type system pushes that
+    invariant up to the caller.
+
+    ``format`` defaults to ``"png"`` so existing callers and tests
+    that constructed ``CacheKey(file_key=..., z=..., x=..., y=...)``
+    keep working — only the WebP path needs to opt in.
     """
 
     file_key: str
     z: int
     x: int
     y: int
+    format: str = "png"
 
 
 @dataclass(frozen=True, slots=True)

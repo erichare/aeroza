@@ -173,6 +173,40 @@ class ProbabilisticMetrics:
     ensemble_size: int
     sample_count: int
     threshold_dbz: float
+    # Per-bin reliability histogram. ``bins[i]`` covers the half-open
+    # forecast-probability interval ``[i/N, (i+1)/N)`` (with the last
+    # bin closed on both sides so ``prob == 1.0`` lands in the top
+    # bucket). N defaults to :data:`RELIABILITY_BIN_COUNT`. ``count``
+    # is the number of cells whose forecast prob fell in this bin;
+    # ``observed`` is how many of those cells crossed the threshold;
+    # ``mean_prob`` is the average forecast prob for those cells —
+    # the x-coordinate of the bin's reliability dot. The aggregator
+    # sums ``count`` and ``observed`` across rows to compute the
+    # window's per-bin observed frequency.
+    reliability_bins: tuple[ReliabilityBin, ...] = ()
+
+
+# Number of reliability-diagram bins. 10 is the operational standard
+# — fine enough that the curve has resolution, coarse enough that
+# bins have non-trivial sample counts on a typical event.
+RELIABILITY_BIN_COUNT: Final[int] = 10
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilityBin:
+    """One bin of the reliability histogram.
+
+    ``lower`` is the inclusive lower edge of the forecast-probability
+    interval (``upper = lower + 1/N``). ``count`` and ``observed``
+    are integer counts; ``mean_prob`` is the average forecast prob
+    for the cells in this bin (``0.0`` when count == 0, but the
+    aggregator skips empty bins anyway).
+    """
+
+    lower: float
+    count: int
+    observed: int
+    mean_prob: float
 
 
 def brier_score(probabilities: np.ndarray, observed_events: np.ndarray) -> float:
@@ -256,6 +290,61 @@ def crps_ensemble(members: np.ndarray, observations: np.ndarray) -> tuple[float,
     return float(np.mean(crps_per_cell)), sample_count
 
 
+def reliability_bins_from_arrays(
+    probabilities: np.ndarray,
+    observed_events: np.ndarray,
+    *,
+    n_bins: int = RELIABILITY_BIN_COUNT,
+) -> tuple[ReliabilityBin, ...]:
+    """Bin ``probabilities`` into ``n_bins`` evenly-spaced buckets.
+
+    For each bucket, count the cells that fell into it, the cells
+    that crossed the threshold, and the average forecast probability
+    of those cells. NaN-aware: cells where either array is non-finite
+    are dropped before binning. Empty bins are still returned (with
+    ``count=0``) so the wire shape is fixed-length and the API can
+    serialise it without per-row schema variance.
+    """
+    if probabilities.shape != observed_events.shape:
+        raise ValueError(
+            f"shape mismatch: probabilities {probabilities.shape} "
+            f"vs observed_events {observed_events.shape}"
+        )
+    valid = np.isfinite(probabilities) & np.isfinite(observed_events)
+    p = probabilities[valid].astype(np.float64)
+    o = observed_events[valid].astype(np.float64)
+
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    # ``digitize`` gives 1-indexed bins; subtract one and clamp the
+    # right edge so prob == 1.0 lands in the last bucket. ``right=False``
+    # means lower edges are inclusive — matches the docstring contract.
+    indices = np.clip(np.digitize(p, edges, right=False) - 1, 0, n_bins - 1)
+
+    bins: list[ReliabilityBin] = []
+    for i in range(n_bins):
+        mask = indices == i
+        count = int(mask.sum())
+        if count == 0:
+            bins.append(
+                ReliabilityBin(
+                    lower=float(edges[i]),
+                    count=0,
+                    observed=0,
+                    mean_prob=0.0,
+                )
+            )
+            continue
+        bins.append(
+            ReliabilityBin(
+                lower=float(edges[i]),
+                count=count,
+                observed=int(o[mask].sum()),
+                mean_prob=float(p[mask].mean()),
+            )
+        )
+    return tuple(bins)
+
+
 def score_probabilistic_grids(
     members: np.ndarray,
     observation: np.ndarray,
@@ -296,6 +385,7 @@ def score_probabilistic_grids(
             ensemble_size=n_members,
             sample_count=0,
             threshold_dbz=threshold_dbz,
+            reliability_bins=(),
         )
 
     member_events = (members >= threshold_dbz).astype(np.float64)
@@ -313,6 +403,7 @@ def score_probabilistic_grids(
         ensemble_size=n_members,
         sample_count=sample_count,
         threshold_dbz=threshold_dbz,
+        reliability_bins=reliability_bins_from_arrays(probabilities, observed_events),
     )
 
 
@@ -350,13 +441,16 @@ def csi(hits: int, misses: int, false_alarms: int) -> float | None:
 
 __all__ = [
     "DEFAULT_THRESHOLD_DBZ",
+    "RELIABILITY_BIN_COUNT",
     "DeterministicMetrics",
     "ProbabilisticMetrics",
+    "ReliabilityBin",
     "brier_score",
     "crps_ensemble",
     "csi",
     "far",
     "pod",
+    "reliability_bins_from_arrays",
     "score_deterministic_grids",
     "score_probabilistic_grids",
 ]

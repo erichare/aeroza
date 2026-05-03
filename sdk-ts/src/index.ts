@@ -19,6 +19,10 @@
 export { AeroaClient, AeroaApiError } from "./client";
 export type { AeroaClientOptions } from "./client";
 export type {
+  AdminSeedEventRequest,
+  AdminSeedEventState,
+  AdminSeedEventStatusQuery,
+  AdminSeedEventTask,
   AlertDetailFeature,
   AlertDetailProperties,
   AlertFeature,
@@ -64,6 +68,8 @@ export type {
   MrmsStats,
   PolygonQuery,
   PolygonReducer,
+  ReliabilityBin,
+  ReliabilityRow,
   SampleQuery,
   Severity,
   Stats,

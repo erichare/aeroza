@@ -47,6 +47,10 @@ const client = new AeroaClient({ apiBase: API_BASE });
 // ---------------------------------------------------------------------------
 
 export type {
+  AdminSeedEventRequest,
+  AdminSeedEventState,
+  AdminSeedEventStatusQuery,
+  AdminSeedEventTask,
   AlertDetailFeature,
   AlertDetailProperties,
   AlertFeature,
@@ -82,6 +86,8 @@ export type {
   MrmsGridList,
   MrmsStats,
   PolygonReducer,
+  ReliabilityBin,
+  ReliabilityRow,
   Severity,
   Stats,
 } from "@aeroza/sdk";
@@ -163,4 +169,21 @@ export function fetchAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleLi
  */
 export function alertsStreamUrl(): string {
   return client.alertsStreamUrl();
+}
+
+// ---------------------------------------------------------------------------
+// Admin — seed historical events. Both routes 404 when the server's
+// `AEROZA_DEV_ADMIN_ENABLED` flag is off; callers handle that as
+// "feature not available" rather than retrying.
+
+export function startSeedEvent(
+  body: import("@aeroza/sdk").AdminSeedEventRequest,
+): Promise<import("@aeroza/sdk").AdminSeedEventTask> {
+  return client.startSeedEvent(body);
+}
+
+export function fetchSeedEventStatus(
+  query: import("@aeroza/sdk").AdminSeedEventStatusQuery,
+): Promise<import("@aeroza/sdk").AdminSeedEventTask> {
+  return client.getSeedEventStatus(query);
 }

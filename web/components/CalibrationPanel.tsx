@@ -8,11 +8,13 @@ import {
   type CalibrationSeriesItem,
   type CalibrationSeriesPoint,
   type CalibrationSeriesResponse,
+  type ReliabilityRow,
   fetchCalibration,
   fetchCalibrationSeries,
 } from "@/lib/api";
 
 import { Panel } from "./Panel";
+import { ReliabilityDiagram } from "./ReliabilityDiagram";
 import { Sparkline } from "./Sparkline";
 import { StatusDot } from "./StatusDot";
 
@@ -141,9 +143,39 @@ export function CalibrationPanel() {
           <CalibrationMatrix matrix={matrix} metric={metric} />
         ) : null}
 
+        {!error && metric === "brier" && (data?.reliability ?? []).length > 0 ? (
+          <ReliabilityDiagrams rows={data!.reliability} />
+        ) : null}
+
         <Footnote metric={metric} />
       </div>
     </Panel>
+  );
+}
+
+function ReliabilityDiagrams({ rows }: { rows: ReadonlyArray<ReliabilityRow> }) {
+  return (
+    <section className="mt-5 border-t border-border/40 pt-4">
+      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-muted">
+        Reliability — observed frequency vs forecast probability
+      </h3>
+      <p className="mb-3 max-w-2xl text-[11px] leading-relaxed text-muted">
+        A perfectly-calibrated forecaster lies on the diagonal: when it
+        says 30%, the event happens 30% of the time. Curves above the
+        diagonal mean the forecaster is under-confident (events happen
+        more often than predicted); below means over-confident. Dot
+        size scales with the bin's share of total cells, so bins with
+        thin support are visibly thinner. Empty bins are skipped.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        {rows.map((row) => (
+          <ReliabilityDiagram
+            key={`${row.algorithm}:${row.forecastHorizonMinutes}`}
+            row={row}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 

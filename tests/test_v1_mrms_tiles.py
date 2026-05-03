@@ -269,3 +269,66 @@ async def test_live_tile_keeps_short_ttl_and_bypasses_lru(
     assert "max-age=60" in response.headers["cache-control"]
     assert "immutable" not in response.headers["cache-control"]
     assert response.headers["x-aeroza-tile-cache"] == "bypass"
+
+
+async def test_accept_image_webp_returns_webp_with_vary_header(
+    api_client: AsyncClient, integration_db: Database, tmp_path: Path
+) -> None:
+    """When the client accepts ``image/webp``, the response is WebP-encoded
+    with ``Content-Type: image/webp`` and ``Vary: Accept`` so shared caches
+    partition correctly between PNG and WebP variants. The URL still
+    ends in ``.png`` for MapLibre's tile-template compatibility — the
+    extension lies, but every modern browser sends the right Accept."""
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("k1", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=k1",
+        headers={"Accept": "image/webp,image/png,*/*"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/webp"
+    assert response.headers["vary"] == "Accept"
+    # Sanity-check the actual bytes: WebP files start with the RIFF
+    # magic and carry "WEBP" in bytes 8-12.
+    assert response.content[:4] == b"RIFF"
+    assert response.content[8:12] == b"WEBP"
+
+
+async def test_png_and_webp_caches_are_disjoint_per_format(
+    api_client: AsyncClient, integration_db: Database, tmp_path: Path
+) -> None:
+    """The LRU keys on ``(file_key, z, x, y, format)`` so a request for
+    PNG doesn't accidentally serve cached WebP bytes (or vice versa).
+    First request in each format is a miss; second is a hit."""
+    from aeroza.tiles.cache import TilePngCache, set_default_cache
+
+    set_default_cache(TilePngCache(max_bytes=1024 * 1024))
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("k1", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    png_first = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=k1",
+        headers={"Accept": "image/png"},
+    )
+    assert png_first.headers["x-aeroza-tile-cache"] == "miss"
+    assert png_first.headers["content-type"] == "image/png"
+
+    webp_first = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=k1",
+        headers={"Accept": "image/webp"},
+    )
+    # Cross-format request: must be a miss because PNG cached above
+    # is in a separate slot.
+    assert webp_first.headers["x-aeroza-tile-cache"] == "miss"
+    assert webp_first.headers["content-type"] == "image/webp"
+
+    png_second = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=k1",
+        headers={"Accept": "image/png"},
+    )
+    assert png_second.headers["x-aeroza-tile-cache"] == "hit"
+    assert png_second.content == png_first.content

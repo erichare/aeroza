@@ -72,7 +72,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -156,7 +156,12 @@ from aeroza.query.schemas import (
 )
 from aeroza.query.stats import Stats, compute_stats, stats_view_to_model
 from aeroza.tiles.cache import CacheKey, get_default_cache
-from aeroza.tiles.raster import render_tile_png, transparent_tile_png
+from aeroza.tiles.raster import (
+    TILE_FORMAT_CONTENT_TYPE,
+    TileFormat,
+    render_tile_image,
+    transparent_tile_bytes,
+)
 from aeroza.verify.schemas import (
     CalibrationResponse,
     CalibrationSeriesResponse,
@@ -169,7 +174,11 @@ from aeroza.verify.store import (
 from aeroza.verify.store import (
     DEFAULT_BUCKET_SECONDS as CALIBRATION_DEFAULT_BUCKET_SECONDS,
 )
-from aeroza.verify.store import aggregate_calibration, aggregate_calibration_series
+from aeroza.verify.store import (
+    aggregate_calibration,
+    aggregate_calibration_reliability,
+    aggregate_calibration_series,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -453,22 +462,53 @@ _TILE_CACHE_SECONDS_LIVE: int = 60
 _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 
 
+def _negotiate_tile_format(accept: str | None) -> TileFormat:
+    """Pick PNG or WebP based on the request's Accept header.
+
+    Two-format content negotiation kept deliberately tiny:
+
+    * If the client explicitly accepts ``image/webp``, return webp —
+      the bytes are ~30-40% smaller than the equivalent lossless
+      PNG and Pillow encodes them ~2x faster (cold-render win).
+    * Otherwise return PNG. The URL still ends in ``.png`` either
+      way; the response's ``Content-Type`` plus a ``Vary: Accept``
+      header is what the cache and the client read.
+
+    No q-value parsing: in practice every browser ships
+    ``image/webp`` ahead of ``image/png`` if it supports both, so
+    the substring check is reliable.
+    """
+    if accept is None:
+        return "png"
+    return "webp" if "image/webp" in accept.lower() else "png"
+
+
 @router.get(
     "/mrms/tiles/{z}/{x}/{y}.png",
     tags=["mrms"],
     summary="Raster tile of an MRMS grid (Web Mercator, XYZ)",
     description=(
-        "Returns a 256×256 PNG suitable as a MapLibre / Leaflet raster "
-        "source. By default renders the most recent ``MergedReflectivity"
-        "Composite`` grid; pass ``file_key`` to pin a specific grid (used "
-        "by the timeline scrubber). Tiles are sampled nearest-neighbor "
-        "from the Zarr store, coloured with the standard NWS dBZ ramp, "
-        "and 86%-opaque so the basemap shows through where there's no "
-        "echo."
+        "Returns a 256×256 raster tile suitable as a MapLibre / Leaflet "
+        "raster source. By default renders the most recent "
+        "``MergedReflectivityComposite`` grid; pass ``file_key`` to pin "
+        "a specific grid (used by the timeline scrubber). Tiles are "
+        "sampled nearest-neighbor from the Zarr store, coloured with "
+        "the standard NWS dBZ ramp, and 86%-opaque so the basemap shows "
+        "through where there's no echo.\n\n"
+        "**Content negotiation**: the URL ends in ``.png`` for "
+        "MapLibre's tile-template compatibility, but the response is "
+        "WebP when the request's ``Accept`` header includes "
+        "``image/webp`` (every modern browser does). WebP is ~30-40% "
+        "smaller than PNG for the dBZ ramp's discrete colours and "
+        "Pillow encodes it ~2x faster — both compound on top of the "
+        "per-tile LRU."
     ),
     response_class=Response,
     responses={
-        200: {"content": {"image/png": {}}, "description": "Tile PNG."},
+        200: {
+            "content": {"image/png": {}, "image/webp": {}},
+            "description": "Tile PNG or WebP (per the request's Accept header).",
+        },
         404: {"description": "No matching grid materialised yet."},
     },
 )
@@ -495,7 +535,17 @@ async def get_mrms_tile_route(
             ),
         ),
     ] = None,
+    accept: Annotated[
+        str | None,
+        Header(
+            description=(
+                "Browser-supplied content negotiation. Include "
+                "``image/webp`` to opt into the WebP encoding."
+            ),
+        ),
+    ] = None,
 ) -> Response:
+    tile_format: TileFormat = _negotiate_tile_format(accept)
     if file_key is not None:
         grid = await find_mrms_grid_by_key(session, file_key)
     else:
@@ -509,9 +559,15 @@ async def get_mrms_tile_route(
         # a fileKey: even a "missing pinned grid" answer can flip when
         # the materialiser catches up, so we don't promise immutability.
         return Response(
-            content=transparent_tile_png(),
-            media_type="image/png",
-            headers={"Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS_LIVE}"},
+            content=transparent_tile_bytes(format=tile_format),
+            media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
+            headers={
+                "Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS_LIVE}",
+                # Same body shape across both formats; declaring the
+                # negotiated dimension lets shared caches partition by
+                # Accept correctly when CDNs eventually sit in front.
+                "Vary": "Accept",
+            },
         )
 
     n = 1 << z
@@ -521,27 +577,33 @@ async def get_mrms_tile_route(
             detail=f"tile coords out of range for zoom {z} (max x/y = {n - 1})",
         )
 
-    # Server-side LRU keyed by (file_key, z, x, y). Only pinned-mode
-    # tiles are eligible — live-mode tiles' "latest grid" target moves
-    # with new ingests and would race the materialiser. Wrapping the
-    # render in the cache covers both first-paint of the radar loop
-    # (other browsers / cold cold caches) and warm reloads.
+    # Server-side LRU keyed by (file_key, z, x, y, format). Only
+    # pinned-mode tiles are eligible — live-mode tiles' "latest grid"
+    # target moves with new ingests and would race the materialiser.
+    # Including ``format`` in the key keeps PNG and WebP responses
+    # in distinct slots so a request for ``image/webp`` doesn't
+    # accidentally serve PNG bytes.
     cache = get_default_cache()
-    cache_key = CacheKey(file_key=grid.file_key, z=z, x=x, y=y) if file_key is not None else None
-    cached_png: bytes | None = cache.get(cache_key) if cache_key is not None else None
+    cache_key = (
+        CacheKey(file_key=grid.file_key, z=z, x=x, y=y, format=tile_format)
+        if file_key is not None
+        else None
+    )
+    cached_bytes: bytes | None = cache.get(cache_key) if cache_key is not None else None
 
-    if cached_png is not None:
-        png = cached_png
+    if cached_bytes is not None:
+        body = cached_bytes
         cache_status = "hit"
     else:
         try:
-            png = await asyncio.to_thread(
-                render_tile_png,
+            body = await asyncio.to_thread(
+                render_tile_image,
                 zarr_uri=grid.zarr_uri,
                 variable=grid.variable,
                 z=z,
                 x=x,
                 y=y,
+                format=tile_format,
             )
         except KeyError as exc:
             # Variable not in Zarr → grid in catalog is broken; surface as 502.
@@ -550,7 +612,7 @@ async def get_mrms_tile_route(
                 detail=f"grid storage missing variable: {exc}",
             ) from exc
         if cache_key is not None:
-            cache.put(cache_key, png)
+            cache.put(cache_key, body)
         cache_status = "miss" if cache_key is not None else "bypass"
 
     cache_control = (
@@ -559,10 +621,13 @@ async def get_mrms_tile_route(
         else f"public, max-age={_TILE_CACHE_SECONDS_LIVE}"
     )
     return Response(
-        content=png,
-        media_type="image/png",
+        content=body,
+        media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
         headers={
             "Cache-Control": cache_control,
+            # Negotiated on Accept — declare it so shared caches
+            # partition correctly between the PNG and WebP variants.
+            "Vary": "Accept",
             # Including the source key in headers lets clients (and our
             # smoke tests) verify which grid populated a tile without
             # decoding the PNG.
@@ -1012,10 +1077,23 @@ async def get_calibration_route(
         level=level,
         window_hours=window_hours,
     )
+    # Pull reliability bins in parallel-shaped logic but sequentially —
+    # sticking to one shared session keeps the connection-pool story
+    # simple. Reliability data is small (10 bins × ~60 bytes per
+    # algo/horizon) so the extra round-trip is negligible.
+    reliability = await aggregate_calibration_reliability(
+        session,
+        since=since,
+        algorithm=algorithm,
+        product=product,
+        level=level,
+        window_hours=window_hours,
+    )
     return calibration_buckets_to_response(
         list(buckets),
         generated_at=now,
         window_hours=window_hours,
+        reliability=reliability,
     )
 
 
