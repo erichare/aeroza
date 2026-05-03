@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Apple touch icon (180×180 viewBox; iOS pads it on the home screen).
+  Same hook-echo geometry as icon.svg, but on a brass-tinted background
+  so it has presence next to the typical app-icon row instead of looking
+  like a stamp on a transparent square. iOS strips alpha and squashes
+  to a rounded-rect, so a flat background fill reads better there.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <rect width="180" height="180" fill="#e8ecf0" />
+  <g transform="translate(28 28) scale(1.94)">
+    <path fill="#ae7a33" d="M 32 8 C 18 8, 8 20, 8 30 C 8 42, 18 50, 28 50 C 34 50, 38 52, 42 54 C 50 56, 56 52, 56 46 C 56 40, 50 36, 44 38 C 40 39, 38 42, 38 46 C 38 36, 34 34, 28 34 C 22 34, 18 30, 18 26 C 18 18, 24 14, 32 14 C 38 14, 44 18, 46 24 C 47 27, 50 28, 52 27 C 50 17, 42 8, 32 8 Z" />
+  </g>
+</svg>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { AerozaGlyph } from "./AerozaLogo";
 import { PulseStrip } from "./PulseStrip";
 
 const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
@@ -37,8 +38,19 @@ export function SiteNav() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/60 bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-12 w-full max-w-[1400px] items-center justify-between gap-3 px-6">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-accent pulse-dot" />
+        <Link
+          href="/"
+          className="group flex items-center gap-2 text-accent"
+          aria-label="Aeroza · home"
+        >
+          {/* The brass hook-echo glyph. group-hover/focus tints back to
+              text-text so it integrates with the parent's hover state.
+              16px reads cleanly next to the nav's 11px wordmark. */}
+          <AerozaGlyph
+            size={16}
+            title={null}
+            className="transition-colors group-hover:text-text"
+          />
           <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text">
             Aeroza
           </span>
