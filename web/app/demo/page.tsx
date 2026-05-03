@@ -646,14 +646,36 @@ function EventEmptyState({
             {copied ? "Copied!" : "Copy command"}
           </button>
           <span className="font-mono text-[10px] text-muted">
-            Then run <code className="text-text">aeroza-materialise-mrms --once</code>{" "}
-            to decode the GRIB2 → Zarr.
+            One-shot historical seed; no need to leave the worker running.
           </span>
         </div>
       </div>
+      <p className="text-sm leading-relaxed text-muted">
+        Then materialise the GRIB2 → Zarr (this is what powers the radar
+        tiles):
+      </p>
+      <code className="select-all w-full overflow-x-auto rounded-md border border-border/60 bg-bg/40 px-3 py-2 text-left font-mono text-[11px] text-text">
+        aeroza-materialise-mrms --once
+      </code>
+      <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-left text-[11px] leading-relaxed text-muted">
+        <strong className="font-semibold text-warning">Heads up.</strong>{" "}
+        The materialiser needs <code className="font-mono text-text">cfgrib</code>{" "}
+        + the system <code className="font-mono text-text">eccodes</code>{" "}
+        library to decode GRIB2. The default <code className="font-mono text-text">make
+        start</code> stack ships without them. If you haven't installed
+        the <code className="font-mono text-text">[grib]</code> extra yet:
+        <pre className="mt-1.5 select-all overflow-x-auto rounded border border-border/60 bg-bg/40 p-2 font-mono text-[11px] text-text">
+{`# macOS
+brew install eccodes && uv sync --extra grib
+
+# Linux
+sudo apt-get install -y libeccodes-dev && uv sync --extra grib`}
+        </pre>
+      </div>
       <p className="text-[11px] text-muted/80">
-        On a typical home connection this takes about a minute per hour of
-        radar window, plus a few seconds per grid for the materialiser.
+        On a typical home connection the seed takes about a minute per
+        hour of radar window, plus a few seconds per grid for the
+        materialiser. Then refresh this page.
       </p>
     </div>
   );
