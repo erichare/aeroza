@@ -47,6 +47,51 @@ class MrmsDecodeError(RuntimeError):
     """Raised when a GRIB2 download or decode fails fatally."""
 
 
+class CfgribUnavailableError(MrmsDecodeError):
+    """Raised when xarray can't load the cfgrib engine.
+
+    Distinct from generic decode failures so callers (notably the
+    materialiser worker) can surface the install hint directly instead
+    of forwarding a cryptic xarray ValueError. The two paths to this
+    error: the ``[grib]`` Python extra wasn't installed, OR cfgrib is
+    installed but the system ``libeccodes`` it loads via ctypes is
+    missing.
+    """
+
+
+# How to detect xarray's "engine not registered" error without depending on
+# its concrete exception type (it raises a plain ValueError). Substring
+# match is brittle but xarray's wording has been stable across 2023→
+# releases, and the test in tests/test_mrms_decode.py pins the contract.
+_CFGRIB_NOT_REGISTERED_NEEDLE = "unrecognized engine 'cfgrib'"
+
+# Operator-facing install hint. Centralised so the worker startup probe
+# and the per-file decode error use identical wording.
+CFGRIB_INSTALL_HINT: str = (
+    "cfgrib isn't available — the GRIB2 decoder needs both the [grib] "
+    "Python extra and the eccodes system library:\n"
+    "  macOS:  brew install eccodes && uv sync --extra grib\n"
+    "  Linux:  sudo apt-get install -y libeccodes-dev && uv sync --extra grib\n"
+    "Then restart `aeroza-materialise-mrms`."
+)
+
+
+def ensure_cfgrib_available() -> None:
+    """Probe whether xarray can load the cfgrib engine; raise on failure.
+
+    Designed for the materialiser worker's startup path so it fails fast
+    with a clear install hint instead of grinding through every queued
+    grid with the same per-file error. Cheap (one xarray plugin lookup,
+    no actual GRIB decode), idempotent, side-effect-free.
+    """
+    try:
+        from xarray.backends import plugins
+
+        plugins.get_backend(CFGRIB_ENGINE)
+    except Exception as exc:
+        raise CfgribUnavailableError(CFGRIB_INSTALL_HINT) from exc
+
+
 def download_grib2_payload(
     s3_client: Any,
     *,
@@ -100,6 +145,12 @@ def decode_grib2_to_dataarray(
         try:
             ds = xr.open_dataset(str(tmp_path), engine=CFGRIB_ENGINE)
         except Exception as exc:
+            # Distinguish "cfgrib isn't installed" from "cfgrib is here
+            # but couldn't decode this specific file". Same install hint
+            # the worker startup probe uses, so the message is identical
+            # whichever path surfaces it.
+            if _CFGRIB_NOT_REGISTERED_NEEDLE in str(exc):
+                raise CfgribUnavailableError(CFGRIB_INSTALL_HINT) from exc
             raise MrmsDecodeError(f"cfgrib failed to open GRIB2 payload: {exc}") from exc
 
         variables = [str(v) for v in ds.data_vars]

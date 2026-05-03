@@ -17,9 +17,12 @@ import pytest
 import xarray as xr
 
 from aeroza.ingest.mrms_decode import (
+    CFGRIB_INSTALL_HINT,
+    CfgribUnavailableError,
     MrmsDecodeError,
     decode_grib2_to_dataarray,
     download_grib2_payload,
+    ensure_cfgrib_available,
     gzip_payload,
 )
 
@@ -147,6 +150,51 @@ class TestDecodeGrib2ToDataarray:
             pytest.raises(MrmsDecodeError, match="cfgrib failed to open"),
         ):
             decode_grib2_to_dataarray(b"ignored")
+
+    def test_cfgrib_not_registered_surfaces_install_hint(self) -> None:
+        """xarray's 'unrecognized engine' ValueError gets re-wrapped as
+        a CfgribUnavailableError carrying the install hint, not the
+        cryptic original. Subclass relationship preserved so callers
+        catching MrmsDecodeError still work."""
+        # Reproduce xarray's exact wording so the substring detection
+        # in mrms_decode keeps tracking it.
+        xarray_msg = (
+            "unrecognized engine 'cfgrib' must be one of your download engines: ['store', 'zarr']"
+        )
+        with (
+            patch("xarray.open_dataset", side_effect=ValueError(xarray_msg)),
+            pytest.raises(CfgribUnavailableError, match="brew install eccodes"),
+        ):
+            decode_grib2_to_dataarray(b"ignored")
+        # Subclass relationship preserved so existing handlers still catch.
+        assert issubclass(CfgribUnavailableError, MrmsDecodeError)
+
+
+class TestEnsureCfgribAvailable:
+    def test_raises_when_cfgrib_engine_is_not_registered(self) -> None:
+        # xarray.backends.plugins.get_backend is what we probe; stub it
+        # to mimic the "engine not installed" case.
+        with (
+            patch(
+                "xarray.backends.plugins.get_backend",
+                side_effect=ValueError("unrecognized engine 'cfgrib'"),
+            ),
+            pytest.raises(CfgribUnavailableError, match="uv sync --extra grib"),
+        ):
+            ensure_cfgrib_available()
+
+    def test_passes_when_cfgrib_engine_is_registered(self) -> None:
+        # A truthy return value is enough — we don't actually use the
+        # backend object, we just check the lookup didn't raise.
+        with patch("xarray.backends.plugins.get_backend", return_value=object()):
+            ensure_cfgrib_available()  # must not raise
+
+    def test_install_hint_mentions_both_install_paths(self) -> None:
+        # Sanity-check the hint covers macOS + Linux + the python extra
+        # so the operator can identify their path without scrolling docs.
+        assert "brew install eccodes" in CFGRIB_INSTALL_HINT
+        assert "apt-get install" in CFGRIB_INSTALL_HINT
+        assert "uv sync --extra grib" in CFGRIB_INSTALL_HINT
 
     def test_writes_payload_to_tempfile_so_cfgrib_can_read_a_path(self) -> None:
         captured: dict[str, Any] = {}

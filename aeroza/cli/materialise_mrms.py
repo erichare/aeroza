@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import Final
@@ -32,6 +33,7 @@ import structlog
 
 from aeroza.config import Settings, get_settings
 from aeroza.ingest._aws import open_data_s3_client
+from aeroza.ingest.mrms_decode import CfgribUnavailableError, ensure_cfgrib_available
 from aeroza.ingest.mrms_materialise_event import run_event_triggered_materialisation
 from aeroza.ingest.mrms_materialise_poll import materialise_unmaterialised_once
 from aeroza.ingest.scheduler import IntervalLoop
@@ -114,6 +116,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
+    # Probe cfgrib at startup. Without this, every queued grid would
+    # fail decode with the same xarray "unrecognized engine" error,
+    # flooding the log without an actionable next step. Failing fast
+    # here surfaces the install hint exactly once.
+    try:
+        ensure_cfgrib_available()
+    except CfgribUnavailableError as exc:
+        log.error("materialise_mrms.cfgrib_unavailable", hint=str(exc))
+        # Print to stderr too so the operator sees it even when the
+        # structlog renderer is configured terse / piped to a file.
+        print(f"\n[materialise-mrms] {exc}\n", file=sys.stderr)
+        return 2
     log.info(
         "materialise_mrms.start",
         interval_s=args.interval,
