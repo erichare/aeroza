@@ -704,12 +704,25 @@ function EventEmptyState({
     // offline.
     const probe = async () => {
       try {
-        await fetchSeedEventStatus({
+        const snapshot = await fetchSeedEventStatus({
           since: event.startUtc,
           until: event.endUtc,
         });
-        // Existing task → admin definitely enabled. Snapshot below.
-        if (!cancelled) setAdminAvailable(true);
+        // Existing task → admin definitely enabled. Adopt the in-flight
+        // snapshot so the user lands directly on the in-progress UI
+        // instead of the idle "Seed this event" button (clicking that
+        // when a task is already running would 409).
+        if (!cancelled) {
+          setAdminAvailable(true);
+          setProgress({
+            state: snapshot.state,
+            filesInserted: snapshot.filesInserted,
+            filesUpdated: snapshot.filesUpdated,
+            gridsMaterialised: snapshot.gridsMaterialised,
+            cfgribAvailable: snapshot.cfgribAvailable,
+            error: snapshot.error,
+          });
+        }
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
@@ -786,6 +799,23 @@ function EventEmptyState({
       });
     }
   }, [event.startUtc, event.endUtc, onSeedComplete]);
+
+  // Auto-start the seed when:
+  //   - the admin endpoint is reachable
+  //   - no task is already in flight (probe found `idle` and we haven't
+  //     transitioned out of it)
+  //   - the local archive has zero grids in the window
+  // This collapses the "click event → click seed → wait" sequence into
+  // "click event → wait", which is the UX users actually want. They've
+  // already expressed intent by selecting a featured event; making them
+  // click a second button to materialise the data they obviously want
+  // was just procedural noise.
+  useEffect(() => {
+    if (adminAvailable !== true) return;
+    if (progress.state !== "idle") return;
+    if (gridCount !== 0) return;
+    void handleStart();
+  }, [adminAvailable, progress.state, gridCount, handleStart]);
 
   if (adminAvailable === null) {
     // Probing — render a tiny placeholder so the UI doesn't flash
