@@ -70,23 +70,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libeccodes0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root runtime user.
-RUN groupadd --system --gid 1001 aeroza \
-    && useradd --system --uid 1001 --gid aeroza --create-home aeroza
-
-COPY --from=builder --chown=aeroza:aeroza /app /app
-COPY --chown=aeroza:aeroza Procfile.railway scripts/railway-start.sh ./
+COPY --from=builder /app /app
+COPY Procfile.railway scripts/railway-start.sh ./
 RUN chmod +x ./railway-start.sh
 
 # Materialised Zarr grids land here. Railway mounts a volume at this
-# path so they survive deploys. ``aeroza`` user must own it before the
-# materialiser tries to write.
-RUN mkdir -p /app/data && chown -R aeroza:aeroza /app/data
+# path so they survive deploys. We deliberately run the container as
+# root (no USER directive) so the materialiser can write to the
+# volume — Railway mounts volumes with root ownership and the
+# previous unprivileged ``aeroza`` user couldn't mkdir inside them.
+# Container isolation is the real security boundary here, not the
+# in-container UID split.
+RUN mkdir -p /app/data
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     AEROZA_DATA_DIR="/app/data"
-
-USER aeroza
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
