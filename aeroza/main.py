@@ -92,9 +92,7 @@ def create_app() -> FastAPI:
     # (Vercel web ↔ Railway API, etc.) can authorise the front-end host
     # without having to relax env to development.
     cors_origins.extend(
-        origin.strip()
-        for origin in settings.cors_allow_origins.split(",")
-        if origin.strip()
+        origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()
     )
     if cors_origins:
         app.add_middleware(
