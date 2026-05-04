@@ -67,41 +67,34 @@ const SEVERITY_FILL_COLOR: Record<Severity, string> = {
   Unknown: "#647686",   // cool slate
 };
 
-// CARTO's basemap raster tiles — free, attribution-required. The
-// `voyager_nolabels` variant is a desaturated cool-grey base that pairs
-// with the Meridian palette without competing with the radar overlay.
-// MapLibre doesn't interpolate Leaflet-style `{a-c}` subdomain
-// placeholders, so we list the three explicitly and let it round-robin.
-const CARTO_SUBDOMAINS = ["a", "b", "c"] as const;
-const cartoTiles = (style: string): string[] =>
-  CARTO_SUBDOMAINS.map(
-    (s) => `https://${s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}.png`,
-  );
+// OpenFreeMap's hosted vector basemap. Picked over CARTO raster for two
+// reasons:
+//
+//   1. Vector tiles let MapLibre re-rasterise on the GPU per-zoom, so
+//      city / road / place labels scale smoothly with the camera (Google
+//      Maps style) instead of jumping a tile-zoom at a time.
+//   2. Free, no API key, OSM-licensed, CORS-open. Same operational
+//      profile as CARTO but without the "labels look fuzzy when the
+//      radar is on top" problem the raster `voyager_only_labels` had.
+//
+// `positron` is the light variant — a near-monochrome glacier palette
+// that pairs with the Meridian theme and stays out of the way of the
+// radar reflectivity ramp. Switch to `liberty` or `bright` here if a
+// more saturated look is wanted.
+const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 
-const RASTER_ATTRIBUTION =
-  '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>';
-
-const STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-  sources: {
-    "raster-base": {
-      type: "raster",
-      tiles: cartoTiles("voyager_nolabels"),
-      tileSize: 256,
-      attribution: RASTER_ATTRIBUTION,
-    },
-    "raster-labels": {
-      type: "raster",
-      tiles: cartoTiles("voyager_only_labels"),
-      tileSize: 256,
-    },
-  },
-  layers: [
-    { id: "raster-base", type: "raster", source: "raster-base" },
-    { id: "raster-labels", type: "raster", source: "raster-labels" },
-  ],
-};
+/**
+ * MapLibre layer IDs that render text or icons. Used by the radar /
+ * alerts / states layers as a `beforeId` anchor so they paint *under*
+ * city / road labels — labels stay readable through translucent radar
+ * and alert polygons. positron's symbol layers all start with `place_`,
+ * `transportation_name_`, `water_name_`, etc., so checking `type ===
+ * "symbol"` is the simplest stable hook.
+ */
+function firstSymbolLayerId(map: MapLibreMap): string | undefined {
+  const layers = map.getStyle().layers ?? [];
+  return layers.find((layer) => layer.type === "symbol")?.id;
+}
 
 interface AlertsMapProps {
   initialBounds?: [number, number, number, number]; // [west, south, east, north]
@@ -195,7 +188,7 @@ export function AlertsMap({
       if (cancelled || !containerRef.current || mapRef.current) return;
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style: STYLE,
+        style: BASEMAP_STYLE_URL,
         bounds: initialBounds ?? DEFAULT_BOUNDS,
         fitBoundsOptions: { padding: 40, animate: false },
         attributionControl: { compact: true },
@@ -213,6 +206,12 @@ export function AlertsMap({
       const map = mapRef.current;
       if (!map) return;
 
+      // Anchor every overlay we add (radar, state borders, alerts)
+      // before positron's first symbol layer so city / road / place
+      // labels stay rasterised on top — readable through translucent
+      // radar and alert fills.
+      const beforeLabels = firstSymbolLayerId(map);
+
       // Radar source/layer — sits below alert polygons so a severe-storm
       // alert always paints on top of the reflectivity blob it covers.
       // Cache-bust query (`?_=ts`) is what we mutate on the refresh tick
@@ -225,33 +224,36 @@ export function AlertsMap({
         tileSize: 256,
         attribution: "MRMS · NOAA / NSSL",
       });
-      map.addLayer({
-        id: RADAR_LAYER_ID,
-        type: "raster",
-        source: RADAR_SOURCE_ID,
-        layout: { visibility: showRadar ? "visible" : "none" },
-        paint: {
-          // Slightly more transparent than before so the new state-border
-          // layer reads through light precip without losing the storm's
-          // signal in the dense core.
-          "raster-opacity": 0.78,
-          // Linear instead of nearest at the GL stage smooths the
-          // remaining cell→pixel boundaries the server bilinear sampler
-          // doesn't reach (e.g. when MapLibre is upscaling between zoom
-          // levels mid-pinch).
-          "raster-resampling": "linear",
-          // Fade duration is a function of mode. In live mode (no
-          // radarFileKey) we fade quickly because each tile-URL swap is a
-          // refresh, not a logical step in time. In pinned mode (the
-          // /demo replay) we fade much longer so the eye reads
-          // consecutive frames as continuous motion rather than discrete
-          // jumps. 700ms was chosen against the 800ms-hold of the slowest
-          // playback speed — the fade fits within the hold but only
-          // barely, so the next frame is already ramping in by the time
-          // the previous fully clears.
-          "raster-fade-duration": radarFileKey === null ? 200 : 700,
+      map.addLayer(
+        {
+          id: RADAR_LAYER_ID,
+          type: "raster",
+          source: RADAR_SOURCE_ID,
+          layout: { visibility: showRadar ? "visible" : "none" },
+          paint: {
+            // Slightly more transparent than before so the new state-border
+            // layer reads through light precip without losing the storm's
+            // signal in the dense core.
+            "raster-opacity": 0.78,
+            // Linear instead of nearest at the GL stage smooths the
+            // remaining cell→pixel boundaries the server bilinear sampler
+            // doesn't reach (e.g. when MapLibre is upscaling between zoom
+            // levels mid-pinch).
+            "raster-resampling": "linear",
+            // Fade duration is a function of mode. In live mode (no
+            // radarFileKey) we fade quickly because each tile-URL swap is a
+            // refresh, not a logical step in time. In pinned mode (the
+            // /demo replay) we fade much longer so the eye reads
+            // consecutive frames as continuous motion rather than discrete
+            // jumps. 700ms was chosen against the 800ms-hold of the slowest
+            // playback speed — the fade fits within the hold but only
+            // barely, so the next frame is already ramping in by the time
+            // the previous fully clears.
+            "raster-fade-duration": radarFileKey === null ? 200 : 700,
+          },
         },
-      });
+        beforeLabels,
+      );
 
       // US state boundaries — fetched once, shared across map instances
       // via the in-module promise cache. We add the source and layer
@@ -263,26 +265,29 @@ export function AlertsMap({
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-      map.addLayer({
-        id: STATES_LINE_LAYER_ID,
-        type: "line",
-        source: STATES_SOURCE_ID,
-        paint: {
-          "line-color": STATE_BORDER_COLOR,
-          // Width grows gently with zoom — too thick at z=4 covers
-          // small states; too thin at z=8 disappears against echoes.
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            3, 0.45,
-            5, 0.8,
-            8, 1.2,
-            10, 1.6,
-          ],
-          "line-opacity": 0.55,
+      map.addLayer(
+        {
+          id: STATES_LINE_LAYER_ID,
+          type: "line",
+          source: STATES_SOURCE_ID,
+          paint: {
+            "line-color": STATE_BORDER_COLOR,
+            // Width grows gently with zoom — too thick at z=4 covers
+            // small states; too thin at z=8 disappears against echoes.
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              3, 0.45,
+              5, 0.8,
+              8, 1.2,
+              10, 1.6,
+            ],
+            "line-opacity": 0.55,
+          },
         },
-      });
+        beforeLabels,
+      );
       void loadUsStateBoundaries()
         .then((collection) => {
           const source = map.getSource(STATES_SOURCE_ID) as
@@ -305,47 +310,53 @@ export function AlertsMap({
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-      map.addLayer({
-        id: FILL_LAYER_ID,
-        type: "fill",
-        source: SOURCE_ID,
-        paint: {
-          "fill-color": [
-            "match",
-            ["get", "severity"],
-            "Extreme", SEVERITY_FILL_COLOR.Extreme,
-            "Severe", SEVERITY_FILL_COLOR.Severe,
-            "Moderate", SEVERITY_FILL_COLOR.Moderate,
-            "Minor", SEVERITY_FILL_COLOR.Minor,
-            SEVERITY_FILL_COLOR.Unknown,
-          ],
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "hover"], false],
-            0.6,
-            0.4,
-          ],
+      map.addLayer(
+        {
+          id: FILL_LAYER_ID,
+          type: "fill",
+          source: SOURCE_ID,
+          paint: {
+            "fill-color": [
+              "match",
+              ["get", "severity"],
+              "Extreme", SEVERITY_FILL_COLOR.Extreme,
+              "Severe", SEVERITY_FILL_COLOR.Severe,
+              "Moderate", SEVERITY_FILL_COLOR.Moderate,
+              "Minor", SEVERITY_FILL_COLOR.Minor,
+              SEVERITY_FILL_COLOR.Unknown,
+            ],
+            "fill-opacity": [
+              "case",
+              ["boolean", ["feature-state", "hover"], false],
+              0.6,
+              0.4,
+            ],
+          },
+          // Push severe events on top so a Minor doesn't obscure an Extreme.
         },
-        // Push severe events on top so a Minor doesn't obscure an Extreme.
-      });
-      map.addLayer({
-        id: OUTLINE_LAYER_ID,
-        type: "line",
-        source: SOURCE_ID,
-        paint: {
-          "line-color": [
-            "match",
-            ["get", "severity"],
-            "Extreme", SEVERITY_FILL_COLOR.Extreme,
-            "Severe", SEVERITY_FILL_COLOR.Severe,
-            "Moderate", SEVERITY_FILL_COLOR.Moderate,
-            "Minor", SEVERITY_FILL_COLOR.Minor,
-            SEVERITY_FILL_COLOR.Unknown,
-          ],
-          "line-width": 1.4,
-          "line-opacity": 0.9,
+        beforeLabels,
+      );
+      map.addLayer(
+        {
+          id: OUTLINE_LAYER_ID,
+          type: "line",
+          source: SOURCE_ID,
+          paint: {
+            "line-color": [
+              "match",
+              ["get", "severity"],
+              "Extreme", SEVERITY_FILL_COLOR.Extreme,
+              "Severe", SEVERITY_FILL_COLOR.Severe,
+              "Moderate", SEVERITY_FILL_COLOR.Moderate,
+              "Minor", SEVERITY_FILL_COLOR.Minor,
+              SEVERITY_FILL_COLOR.Unknown,
+            ],
+            "line-width": 1.4,
+            "line-opacity": 0.9,
+          },
         },
-      });
+        beforeLabels,
+      );
 
       const handleClick = (e: MapMouseEvent) => {
         const features = map.queryRenderedFeatures(e.point, {
