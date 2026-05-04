@@ -53,16 +53,27 @@ Vercel hobby and Supabase free tier are $0.
    connection string in step 2.
 3. **Database → Extensions** → enable **postgis**. (PostGIS ships in
    Supabase out of the box; you just have to flip the toggle.)
-4. **Database → Connection string** → switch to **URI** format. You
-   want the **direct connection** string, not the pooler — alembic
-   migrations need session-level DDL. Looks like:
+4. **Database → Connection string** → URI format → choose **Session
+   pooler** (NOT *Direct connection*, NOT *Transaction pooler*). Why:
+   - *Direct connection* (`db.PROJECT.supabase.co`) resolves to IPv6
+     only on the Free tier, and Railway has no IPv6 egress, so every
+     connect attempt instantly fails with `Network is unreachable`.
+   - *Transaction pooler* (port `6543`) breaks asyncpg's prepared
+     statements and breaks alembic migrations.
+   - *Session pooler* (port `5432` on the `pooler.supabase.com` host)
+     is IPv4 and supports session-level features. This is the one.
+
+   It looks like:
    ```
-   postgresql://postgres.PROJECT:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+   postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
    ```
-   Convert to async by swapping the scheme:
+   Convert the scheme for asyncpg:
    ```
-   postgresql+asyncpg://postgres.PROJECT:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+   postgresql+asyncpg://postgres.PROJECT_REF:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
    ```
+   Note the username is `postgres.PROJECT_REF` (with the project ref
+   suffix), not just `postgres` — the pooler uses that to route to
+   your tenant.
 
 ## 2. Railway: deploy the API + workers
 
