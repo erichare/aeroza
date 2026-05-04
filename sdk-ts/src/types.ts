@@ -459,6 +459,46 @@ export interface AlertRuleQuery {
   limit?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Webhook deliveries (audit trail). Read-only — the dispatcher writes
+// rows via internal code, callers consume them via `listWebhookDeliveries`.
+
+export type WebhookDeliveryStatus = "ok" | "failed" | "retrying";
+
+/**
+ * One delivery attempt. Mirrors the `webhook_deliveries` row minus the
+ * raw `payload` (omitted from the wire to keep responses small and
+ * avoid leaking caller-supplied geometry from rule-triggered events;
+ * operators that need the full payload read the table directly).
+ */
+export interface WebhookDelivery {
+  type: "WebhookDelivery";
+  id: string;
+  subscriptionId: string;
+  /** Set when the delivery was triggered by an alert rule, null for raw fan-out. */
+  ruleId: string | null;
+  eventType: string;
+  status: WebhookDeliveryStatus;
+  /** 1-based attempt number (initial = 1, retries 2..N). */
+  attempt: number;
+  responseStatus: number | null;
+  /** Server-side truncated copy of the destination's response body. */
+  responseBodyPreview: string | null;
+  errorReason: string | null;
+  durationMs: number | null;
+  createdAt: string;
+}
+
+export interface WebhookDeliveryList {
+  type: "WebhookDeliveryList";
+  items: WebhookDelivery[];
+}
+
+export interface WebhookDeliveryQuery {
+  status?: WebhookDeliveryStatus;
+  limit?: number;
+}
+
 /**
  * Request body for `POST /v1/alert-rules`. The server mints the id and
  * timestamps; the wire shape carries `subscriptionId` (the FK target

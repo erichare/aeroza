@@ -34,6 +34,8 @@ import type {
   MetarObservation,
   MetarObservationList,
   MetarQuery,
+  WebhookDeliveryList,
+  WebhookDeliveryQuery,
   WebhookSubscription,
   WebhookSubscriptionCreate,
   WebhookSubscriptionList,
@@ -311,6 +313,28 @@ export class AeroaClient {
    */
   async deleteWebhook(id: string): Promise<void> {
     await this.deleteRequest(`/v1/webhooks/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Recent delivery attempts for one subscription, newest first.
+   * Each row is one attempt the dispatcher made (initial + retries),
+   * which is what you actually want when answering "did my webhook
+   * fire / why is it broken?". The signed payload itself is omitted
+   * from the wire (read the DB directly if you need it).
+   */
+  async listWebhookDeliveries(
+    subscriptionId: string,
+    query: WebhookDeliveryQuery = {},
+  ): Promise<WebhookDeliveryList> {
+    const params = new URLSearchParams();
+    if (query.status) params.set("status", query.status);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    return this.getJson<WebhookDeliveryList>(
+      this.withQuery(
+        `/v1/webhooks/${encodeURIComponent(subscriptionId)}/deliveries`,
+        params,
+      ),
+    );
   }
 
   // -------------------------------------------------------------------------

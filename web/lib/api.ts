@@ -27,6 +27,8 @@ import {
   type CalibrationResponse,
   type CalibrationSeriesQuery,
   type CalibrationSeriesResponse,
+  type WebhookDeliveryList,
+  type WebhookDeliveryQuery,
   type WebhookSubscription,
   type WebhookSubscriptionCreate,
   type WebhookSubscriptionList,
@@ -80,6 +82,10 @@ export type {
   PredicateOp,
   RuleConfig,
   RuleConfigPolygonReducer,
+  WebhookDelivery,
+  WebhookDeliveryList,
+  WebhookDeliveryQuery,
+  WebhookDeliveryStatus,
   WebhookStatus,
   WebhookSubscription,
   WebhookSubscriptionCreate,
@@ -173,6 +179,13 @@ export function createWebhook(
 
 export function deleteWebhook(id: string): Promise<void> {
   return client.deleteWebhook(id);
+}
+
+export function fetchWebhookDeliveries(
+  subscriptionId: string,
+  query: WebhookDeliveryQuery = {},
+): Promise<WebhookDeliveryList> {
+  return client.listWebhookDeliveries(subscriptionId, query);
 }
 
 export function fetchAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {

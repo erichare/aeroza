@@ -17,6 +17,8 @@ Surface:
   description / status).
 - ``DELETE /v1/webhooks/{id}`` — remove. Idempotent — second delete
   returns 404.
+- ``GET /v1/webhooks/{id}/deliveries`` — recent delivery attempts.
+  Read-only audit trail (write path lives in ``delivery.py``).
 """
 
 from __future__ import annotations
@@ -29,6 +31,19 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.query.dependencies import get_session
+from aeroza.webhooks.delivery_schemas import (
+    WebhookDeliveryList,
+    webhook_delivery_from_row,
+)
+from aeroza.webhooks.delivery_store import (
+    DEFAULT_LIST_LIMIT as DELIVERIES_DEFAULT_LIST_LIMIT,
+)
+from aeroza.webhooks.delivery_store import (
+    MAX_LIST_LIMIT as DELIVERIES_MAX_LIST_LIMIT,
+)
+from aeroza.webhooks.delivery_store import (
+    list_deliveries_for_subscription,
+)
 from aeroza.webhooks.schemas import (
     WebhookSubscription,
     WebhookSubscriptionCreate,
@@ -176,6 +191,60 @@ async def delete_webhook_route(
             detail=f"webhook subscription {sub_id} not found",
         )
     await session.commit()
+
+
+@router.get(
+    "/{sub_id}/deliveries",
+    response_model=WebhookDeliveryList,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    summary="Recent delivery attempts for a subscription",
+    description=(
+        "Returns delivery rows ordered by ``created_at`` descending — "
+        "one row per attempt the dispatcher made (initial + retries). "
+        'Newest-first matches "why did it just fail?" debugging.\n\n'
+        "Optional ``status`` filter narrows to a single outcome "
+        "(``ok`` / ``failed`` / ``retrying``). The signed payload itself "
+        "is omitted from the wire — operators that need it can read "
+        "``webhook_deliveries.payload`` directly."
+    ),
+    responses={404: {"description": "Subscription not found."}},
+)
+async def list_webhook_deliveries_route(
+    sub_id: Annotated[uuid.UUID, Path(description="Subscription id (UUID).")],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    status_filter: Annotated[
+        str | None,
+        Query(
+            alias="status",
+            description="Filter to a single status (ok / failed / retrying).",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=DELIVERIES_MAX_LIST_LIMIT,
+            description=f"Max attempts to return (default {DELIVERIES_DEFAULT_LIST_LIMIT}).",
+        ),
+    ] = DELIVERIES_DEFAULT_LIST_LIMIT,
+) -> WebhookDeliveryList:
+    # 404 for unknown subscriptions so callers don't conflate "no
+    # attempts yet" with "you typo'd the id."
+    if await get_subscription(session, sub_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"webhook subscription {sub_id} not found",
+        )
+    rows = await list_deliveries_for_subscription(
+        session,
+        sub_id,
+        status=status_filter,
+        limit=limit,
+    )
+    return WebhookDeliveryList(
+        items=[webhook_delivery_from_row(row) for row in rows],
+    )
 
 
 __all__ = ["router"]
