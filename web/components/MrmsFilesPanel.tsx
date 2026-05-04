@@ -25,8 +25,8 @@ export function MrmsFilesPanel() {
       try {
         setLoading(true);
         const data = await fetchMrmsFiles({
-          product: product || undefined,
-          level: level || undefined,
+          ...(product ? { product } : {}),
+          ...(level ? { level } : {}),
           limit: DEFAULT_LIMIT,
         });
         if (cancelled) return;
@@ -125,20 +125,24 @@ interface CatalogStats {
 }
 
 function buildStats(items: MrmsFileItem[]): CatalogStats {
-  if (items.length === 0) {
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!first || !last) {
     return { totalBytes: 0, earliest: null, latest: null, cadenceSeconds: null };
   }
   // `items` is ordered newest-first by the API.
   const totalBytes = items.reduce((sum, i) => sum + i.sizeBytes, 0);
-  const latest = new Date(items[0].validAt);
-  const earliest = new Date(items[items.length - 1].validAt);
+  const latest = new Date(first.validAt);
+  const earliest = new Date(last.validAt);
   const span = (latest.getTime() - earliest.getTime()) / 1000;
   const cadenceSeconds = items.length > 1 ? span / (items.length - 1) : null;
   return { totalBytes, earliest, latest, cadenceSeconds };
 }
 
 function Timeline({ items }: { items: MrmsFileItem[] }) {
-  if (items.length === 0) {
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!first || !last) {
     return (
       <div className="rounded-xl border border-border/60 bg-bg/40 px-3 py-6 text-center text-xs text-muted">
         No catalog rows. Try `aeroza-ingest-mrms --once`.
@@ -146,8 +150,8 @@ function Timeline({ items }: { items: MrmsFileItem[] }) {
     );
   }
   // Compute relative offsets so the most recent file pins to the right edge.
-  const latest = new Date(items[0].validAt).getTime();
-  const earliest = new Date(items[items.length - 1].validAt).getTime();
+  const latest = new Date(first.validAt).getTime();
+  const earliest = new Date(last.validAt).getTime();
   const hasRange = latest > earliest;
   const span = Math.max(latest - earliest, 1);
   return (

@@ -63,8 +63,9 @@ export function HeroLiveMap() {
       try {
         const data = await fetchMrmsGrids({ limit: 1 });
         if (cancelled) return;
-        if (data.items.length > 0) {
-          setLatestGridAt(new Date(data.items[0].validAt));
+        const first = data.items[0];
+        if (first) {
+          setLatestGridAt(new Date(first.validAt));
         }
       } catch {
         // Freshness is decorative; a failed fetch leaves the badge in

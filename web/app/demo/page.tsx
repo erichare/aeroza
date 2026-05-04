@@ -1097,9 +1097,12 @@ function computeWindow(
     };
   }
   if (grids === null || grids.length === 0) return null;
+  const first = grids[0];
+  const last = grids[grids.length - 1];
+  if (!first || !last) return null;
   return {
-    start: new Date(grids[0].validAt),
-    end: new Date(grids[grids.length - 1].validAt),
+    start: new Date(first.validAt),
+    end: new Date(last.validAt),
   };
 }
 

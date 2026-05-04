@@ -375,11 +375,11 @@ export function AlertsMap({
         const features = map.queryRenderedFeatures(e.point, {
           layers: [FILL_LAYER_ID],
         });
-        if (features.length === 0) {
+        const f = features[0];
+        if (!f) {
           setSelected(null);
           return;
         }
-        const f = features[0];
         // queryRenderedFeatures strips Polygon/MultiPolygon arrays into a JSON
         // string under feature.properties — but our props are flat scalars,
         // so we coerce back to the typed shape used by the side panel.

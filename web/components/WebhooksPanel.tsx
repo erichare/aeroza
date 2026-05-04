@@ -188,9 +188,10 @@ interface CreateFormProps {
 function CreateForm({ onCreated, onError }: CreateFormProps) {
   const [url, setUrl] = useState("");
   const [description, setDescription] = useState("");
-  const [events, setEvents] = useState<ReadonlySet<string>>(
-    new Set([SUPPORTED_EVENTS[0].value]),
-  );
+  const [events, setEvents] = useState<ReadonlySet<string>>(() => {
+    const first = SUPPORTED_EVENTS[0];
+    return new Set(first ? [first.value] : []);
+  });
   const [submitting, setSubmitting] = useState(false);
 
   const toggleEvent = (value: string): void => {

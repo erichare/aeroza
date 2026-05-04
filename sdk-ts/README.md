@@ -10,9 +10,9 @@ TypeScript client for the Aeroza weather-intelligence API.
 ## Quickstart
 
 ```ts
-import { AeroaClient } from "@aeroza/sdk";
+import { AerozaClient } from "@aeroza/sdk";
 
-const client = new AeroaClient({ apiBase: "http://localhost:8000" });
+const client = new AerozaClient({ apiBase: "http://localhost:8000" });
 
 // Health
 const health = await client.getHealth();
@@ -53,7 +53,7 @@ the platform API directly; that keeps reconnection / error handling
 under your control:
 
 ```ts
-const client = new AeroaClient({ apiBase: "http://localhost:8000" });
+const client = new AerozaClient({ apiBase: "http://localhost:8000" });
 const source = new EventSource(client.alertsStreamUrl());
 
 source.addEventListener("alert", (e) => {
@@ -67,17 +67,17 @@ once we know what consumers actually want.
 
 ## Errors
 
-Non-2xx responses throw `AeroaApiError`. The `status` is the HTTP code;
+Non-2xx responses throw `AerozaApiError`. The `status` is the HTTP code;
 `detail` is FastAPI's `detail` field when the body is JSON, or `null`
 otherwise:
 
 ```ts
-import { AeroaApiError } from "@aeroza/sdk";
+import { AerozaApiError } from "@aeroza/sdk";
 
 try {
   await client.sampleGrid({ lat: 50, lng: -50 });
 } catch (err) {
-  if (err instanceof AeroaApiError && err.status === 404) {
+  if (err instanceof AerozaApiError && err.status === 404) {
     console.log("Out of domain:", err.detail);
   } else {
     throw err;

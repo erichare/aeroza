@@ -42,8 +42,8 @@ export function SamplePanel() {
       const sample = await fetchMrmsSample({
         lat: latNum,
         lng: lngNum,
-        product: product || undefined,
-        level: level || undefined,
+        ...(product ? { product } : {}),
+        ...(level ? { level } : {}),
         toleranceDeg: tol,
       });
       setStatus({ kind: "ok", sample, queriedAt: Date.now() });

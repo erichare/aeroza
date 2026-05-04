@@ -2,7 +2,7 @@
  * Thin façade over `@aeroza/sdk` — the TypeScript SDK is the source of
  * truth for wire types and HTTP. This module:
  *
- * 1. Constructs a singleton `AeroaClient` configured for the dev console.
+ * 1. Constructs a singleton `AerozaClient` configured for the dev console.
  * 2. Re-exports the SDK's wire types under the names the components
  *    have been using since before the SDK existed.
  * 3. Re-exports legacy `fetchX` named exports as small wrappers around
@@ -14,8 +14,8 @@
  */
 
 import {
-  AeroaApiError as SdkApiError,
-  AeroaClient,
+  AerozaApiError as SdkApiError,
+  AerozaClient,
   type AlertFeatureCollection,
   type AlertQuery,
   type AlertRule,
@@ -47,7 +47,7 @@ import {
 export const API_BASE: string =
   process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000";
 
-const client = new AeroaClient({ apiBase: API_BASE });
+const client = new AerozaClient({ apiBase: API_BASE });
 
 // ---------------------------------------------------------------------------
 // Re-exported wire types — components import these as before.

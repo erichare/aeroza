@@ -1,5 +1,5 @@
 /**
- * AeroaClient — typed wrapper over the Aeroza v1 REST API.
+ * AerozaClient — typed wrapper over the Aeroza v1 REST API.
  *
  * One class, one method per route, no generics. The whole point of the
  * SDK at this stage is to (a) pin the wire types so consumers get a
@@ -53,7 +53,7 @@ import type {
   Stats,
 } from "./types";
 
-export interface AeroaClientOptions {
+export interface AerozaClientOptions {
   /** Base URL for the API, e.g. `http://localhost:8000`. No trailing slash. */
   apiBase: string;
   /**
@@ -83,24 +83,24 @@ export interface AeroaClientOptions {
  * detail as the message and keeps the status for callers that want to
  * branch on 404 vs 422 vs 5xx without parsing strings.
  */
-export class AeroaApiError extends Error {
+export class AerozaApiError extends Error {
   public readonly status: number;
   public readonly detail: string | null;
 
   constructor(status: number, detail: string | null, fallback: string) {
     super(detail ?? fallback);
-    this.name = "AeroaApiError";
+    this.name = "AerozaApiError";
     this.status = status;
     this.detail = detail;
   }
 }
 
-export class AeroaClient {
+export class AerozaClient {
   private readonly apiBase: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly defaultHeaders: Record<string, string>;
 
-  constructor(options: AeroaClientOptions) {
+  constructor(options: AerozaClientOptions) {
     this.apiBase = stripTrailingSlashes(options.apiBase);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     const headers: Record<string, string> = { ...(options.defaultHeaders ?? {}) };
@@ -407,7 +407,7 @@ export class AeroaClient {
   // Both endpoints sit under `/v1/admin/seed-event` and are gated by
   // the `AEROZA_DEV_ADMIN_ENABLED` env flag on the server. When the
   // flag is off, the routes 404 — the SDK surfaces that as
-  // `AeroaApiError` with status 404, and the /demo button hides the
+  // `AerozaApiError` with status 404, and the /demo button hides the
   // "Seed this event" affordance.
 
   /**
@@ -424,7 +424,7 @@ export class AeroaClient {
 
   /**
    * Read-only snapshot of the seed task for the given window. 404s
-   * (raised as `AeroaApiError`) when no task exists yet — the caller
+   * (raised as `AerozaApiError`) when no task exists yet — the caller
    * is expected to treat that as "not started" and decide whether to
    * POST or simply not show progress.
    */
@@ -482,7 +482,7 @@ export class AeroaClient {
       } catch {
         // Non-JSON body (e.g. an empty 204 also lands here harmlessly).
       }
-      throw new AeroaApiError(
+      throw new AerozaApiError(
         response.status,
         detail,
         `${response.status} ${response.statusText} — ${path}`,
@@ -536,7 +536,7 @@ export class AeroaClient {
       } catch {
         // Non-JSON body — fall through to status-line fallback.
       }
-      throw new AeroaApiError(
+      throw new AerozaApiError(
         response.status,
         detail,
         `${response.status} ${response.statusText} — ${path}`,

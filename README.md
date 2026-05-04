@@ -54,19 +54,24 @@ Modular monolith (FastAPI) with extracted ingest workers:
 ```
 aeroza/
   cli/           Long-running workers + one-shot CLIs (aeroza-* scripts).
-  ingest/        NWS alerts + MRMS reflectivity ingest. NEXRAD L2 / HRRR
-                 / NBM / METAR are roadmap, not built.
-  query/         REST read-side over the ingested data
-                 (alerts, MRMS files / grids, nowcasts, calibration, stats).
-  nowcast/       Forecaster Protocol + persistence baseline.
-                 pySTEPS / NowcastNet land here next.
-  verify/        Continuous verification + sample-weighted aggregates
-                 (MAE / bias / RMSE today; Brier / CRPS once we have an
-                 ensemble forecaster).
+  ingest/        NWS alerts + MRMS reflectivity + METAR observations ingest.
+                 NEXRAD L2 / HRRR / NBM are roadmap, not built.
+  query/         REST read-side over the ingested data — alerts, MRMS
+                 files / grids / tiles, METAR, nowcasts, calibration, stats.
+                 Routes are split per domain under aeroza/query/v1/.
+  nowcast/       Forecaster Protocol + persistence, pySTEPS Lucas–Kanade,
+                 and lagged-ensemble forecasters.
+  verify/        Continuous verification + sample-weighted aggregates —
+                 continuous (MAE / bias / RMSE), categorical (POD / FAR / CSI),
+                 and probabilistic (Brier / CRPS, reliability bins).
   webhooks/      Signed delivery, subscriptions CRUD, alert-rule DSL
                  (point + polygon predicates), dispatcher worker.
   tiles/         XYZ raster tiles for MRMS reflectivity (vector MVT
                  for alerts is roadmap).
+  auth/          Bearer-token API keys (aza_live_*) — opt-in via
+                 AEROZA_AUTH_REQUIRED.
+  admin/         Dev-console-only seed-event endpoints (gated by
+                 AEROZA_DEV_ADMIN_ENABLED).
   stream/        NATS publishers/subscribers + SSE gateway.
   shared/        DB session helpers, common schemas, HTTP client.
 ```
@@ -107,6 +112,13 @@ make extras-nowcast
 ```
 
 For both extras together (or to install everything including the heavy bits), `make install` runs `uv sync --all-extras` — fine when you have eccodes + libomp already in place.
+
+## Project meta
+
+- **Roadmap:** [docs/ROADMAP.md](docs/ROADMAP.md) — phase plan and what shipped vs. what's next.
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md) — release-style notes per phase.
+- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) — branch / PR / merge flow.
+- **Deploy:** [docs/DEPLOY-RAILWAY.md](docs/DEPLOY-RAILWAY.md) — Railway + Supabase + Vercel.
 
 ## License
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import structlog
@@ -192,7 +192,7 @@ async def aggregate_calibration(
     queries.
     """
     if since is None:
-        since = datetime.now().astimezone() - timedelta(hours=window_hours)
+        since = datetime.now(UTC) - timedelta(hours=window_hours)
 
     weighted_mae = func.sum(VerificationRow.mae * VerificationRow.sample_count)
     weighted_bias = func.sum(VerificationRow.bias * VerificationRow.sample_count)
@@ -370,7 +370,7 @@ async def aggregate_calibration_series(
     front-end can build sparklines without re-sorting.
     """
     if since is None:
-        since = datetime.now().astimezone() - timedelta(hours=window_hours)
+        since = datetime.now(UTC) - timedelta(hours=window_hours)
     if bucket_seconds <= 0:
         raise ValueError(f"bucket_seconds must be positive, got {bucket_seconds}")
 
@@ -455,8 +455,6 @@ async def aggregate_calibration_series(
         # column is TIMESTAMPTZ; defensively coerce naive values to UTC
         # so callers can rely on isoformat() with offset.
         if bucket_start.tzinfo is None:
-            from datetime import UTC
-
             bucket_start = bucket_start.replace(tzinfo=UTC)
         threshold = (
             float(row["any_threshold"])
@@ -539,7 +537,7 @@ async def aggregate_calibration_reliability(
     that as ``null`` in the response.
     """
     if since is None:
-        since = datetime.now().astimezone() - timedelta(hours=window_hours)
+        since = datetime.now(UTC) - timedelta(hours=window_hours)
 
     stmt = (
         select(
