@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import Script from "next/script";
+
+import { ScalarMount } from "./ScalarMount";
 
 export const metadata: Metadata = {
   title: "API explorer",
@@ -145,22 +146,11 @@ export default function ApiExplorerPage() {
       </header>
 
       <div className="rounded-lg border border-border/60 bg-surface/40 shadow-sm">
-        {/* Scalar's standalone bundle is dual-configured here:
-
-            * `data-url` is the canonical attribute the v1.25 bundle
-              reads to know which spec to fetch. The JSON-body form
-              (``type="application/json"``) was inconsistent in this
-              version and silently dropped the fetch — leaving the
-              widget rendered but empty.
-            * `data-configuration` carries every other knob so we
-              keep the metaData / theme / hideDarkModeToggle hints,
-              and they're applied in addition to the URL above. */}
-        <script
-          id="api-reference"
-          data-url={`${API_BASE}/openapi.json`}
-          data-configuration={JSON.stringify(SCALAR_CONFIG)}
+        <ScalarMount
+          bundleUrl={SCALAR_BUNDLE_URL}
+          specUrl={`${API_BASE}/openapi.json`}
+          configJson={JSON.stringify(SCALAR_CONFIG)}
         />
-        <Script src={SCALAR_BUNDLE_URL} strategy="afterInteractive" />
       </div>
     </main>
   );
