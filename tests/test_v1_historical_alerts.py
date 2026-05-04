@@ -37,7 +37,9 @@ def _iem_feature(
         "type": "Feature",
         "geometry": {
             "type": "MultiPolygon",
-            "coordinates": [[[[-95.5, 29.8], [-95.4, 29.8], [-95.4, 29.9], [-95.5, 29.9], [-95.5, 29.8]]]],
+            "coordinates": [
+                [[[-95.5, 29.8], [-95.4, 29.8], [-95.4, 29.9], [-95.5, 29.9], [-95.5, 29.8]]]
+            ],
         },
         "properties": {
             "product_id": product_id,

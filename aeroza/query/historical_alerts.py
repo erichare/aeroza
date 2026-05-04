@@ -40,9 +40,7 @@ log = logging.getLogger(__name__)
 # at https://mesonet.agron.iastate.edu/api/ — the GeoJSON variant is the
 # same as the JSON variant but wraps each row in a Feature with a real
 # polygon geometry, which is what the map needs.
-IEM_SBW_URL = (
-    "https://mesonet.agron.iastate.edu/api/1/vtec/sbw_interval.geojson"
-)
+IEM_SBW_URL = "https://mesonet.agron.iastate.edu/api/1/vtec/sbw_interval.geojson"
 
 # Hard cap on the IEM round-trip. The endpoint typically replies in
 # 0.5–3s for a single-WFO query; 15s is a conservative ceiling that
@@ -56,17 +54,17 @@ IEM_TIMEOUT_SECONDS = 15.0
 # fall through to Moderate. The mapping is intentionally coarse — the
 # UI's severity ladder only has five rungs.
 _PHENOMENA_TO_SEVERITY: dict[str, str] = {
-    "TO": "Extreme",   # Tornado
-    "EW": "Extreme",   # Extreme Wind
-    "HU": "Extreme",   # Hurricane
-    "SS": "Extreme",   # Storm Surge
-    "SV": "Severe",    # Severe Thunderstorm
-    "FF": "Severe",    # Flash Flood
-    "FA": "Severe",    # Areal Flood
-    "MA": "Severe",    # Marine
-    "TR": "Severe",    # Tropical Storm
-    "SQ": "Severe",    # Snow Squall
-    "DS": "Severe",    # Dust Storm
+    "TO": "Extreme",  # Tornado
+    "EW": "Extreme",  # Extreme Wind
+    "HU": "Extreme",  # Hurricane
+    "SS": "Extreme",  # Storm Surge
+    "SV": "Severe",  # Severe Thunderstorm
+    "FF": "Severe",  # Flash Flood
+    "FA": "Severe",  # Areal Flood
+    "MA": "Severe",  # Marine
+    "TR": "Severe",  # Tropical Storm
+    "SQ": "Severe",  # Snow Squall
+    "DS": "Severe",  # Dust Storm
 }
 
 
@@ -129,10 +127,7 @@ async def fetch_historical_alerts(query: HistoricalAlertQuery) -> AlertFeatureCo
 
 
 def _cache_key(query: HistoricalAlertQuery) -> str:
-    return (
-        f"{query.since.isoformat()}|{query.until.isoformat()}|"
-        f"{','.join(sorted(query.wfos))}"
-    )
+    return f"{query.since.isoformat()}|{query.until.isoformat()}|{','.join(sorted(query.wfos))}"
 
 
 # IEM caps each request to three WFOs. Larger event regions span more
@@ -196,9 +191,7 @@ async def _fetch_chunk(
     if not isinstance(raw_features, list):
         return AlertFeatureCollection(features=[])
     features = [
-        feat
-        for feat in (_normalise_feature(raw) for raw in raw_features)
-        if feat is not None
+        feat for feat in (_normalise_feature(raw) for raw in raw_features) if feat is not None
     ]
     return AlertFeatureCollection(features=features)
 
@@ -229,12 +222,8 @@ def _normalise_feature(raw: Any) -> AlertFeature | None:
     # in force on screen, which is what the /demo scrubber compares
     # against. Fall back to issuance times when polygon-specific times
     # are absent.
-    onset = _parse_dt(
-        properties.get("utc_polygon_begin") or properties.get("utc_issue")
-    )
-    ends = _parse_dt(
-        properties.get("utc_polygon_end") or properties.get("utc_expire")
-    )
+    onset = _parse_dt(properties.get("utc_polygon_begin") or properties.get("utc_issue"))
+    ends = _parse_dt(properties.get("utc_polygon_end") or properties.get("utc_expire"))
 
     wfo = properties.get("wfo")
     sender_name = f"NWS {wfo}" if isinstance(wfo, str) and wfo else None
@@ -246,7 +235,7 @@ def _normalise_feature(raw: Any) -> AlertFeature | None:
             event=str(event_label),
             headline=str(event_label),
             severity=severity,
-            urgency="Immediate",   # SBWs are always immediate by definition
+            urgency="Immediate",  # SBWs are always immediate by definition
             certainty="Observed",  # …and observed (not forecast)
             sender_name=sender_name,
             area_desc=_string_or_none(properties.get("locations")),
@@ -285,9 +274,7 @@ def parse_wfo_list(raw: str | None) -> tuple[str, ...]:
     """
     if raw is None:
         return ()
-    return tuple(
-        item.strip().upper() for item in raw.split(",") if item.strip()
-    )
+    return tuple(item.strip().upper() for item in raw.split(",") if item.strip())
 
 
 def normalise_wfos(items: Sequence[str]) -> tuple[str, ...]:
