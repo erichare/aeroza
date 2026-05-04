@@ -37,6 +37,13 @@ class Settings(BaseSettings):
 
     api_key_salt: str = "dev-only-replace-me"
 
+    # Comma-separated list of additional CORS origins to allow on top of
+    # the dev-console default. Set this on production deployments where
+    # the web frontend lives on a different host than the API (e.g. a
+    # Vercel-hosted dashboard talking to a Railway-hosted API). Example:
+    # ``AEROZA_CORS_ALLOW_ORIGINS="https://aeroza.vercel.app,https://aeroza.dev"``
+    cors_allow_origins: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

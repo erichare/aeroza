@@ -84,13 +84,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    if get_settings().env == "development":
+    settings = get_settings()
+    cors_origins: list[str] = []
+    if settings.env == "development":
+        cors_origins.extend(DEV_CONSOLE_ORIGINS)
+    # Always honour AEROZA_CORS_ALLOW_ORIGINS so production deployments
+    # (Vercel web ↔ Railway API, etc.) can authorise the front-end host
+    # without having to relax env to development.
+    cors_origins.extend(
+        origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()
+    )
+    if cors_origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=list(DEV_CONSOLE_ORIGINS),
+            allow_origins=cors_origins,
             allow_credentials=False,
-            # The webhook CRUD surface needs the write verbs the dev console
-            # uses for its operator UI (PR #5+). Keep CORS dev-only.
+            # The webhook CRUD surface needs the write verbs the dev
+            # console uses for its operator UI (PR #5+). Same shape applies
+            # to a deployed dashboard talking back to the API.
             allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["*"],
         )
