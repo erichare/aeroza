@@ -437,6 +437,12 @@ export interface AlertRule {
   description: string | null;
   status: AlertRuleStatus;
   config: RuleConfig;
+  /** Whether the predicate's currently true on the latest observation. */
+  currentlyFiring: boolean;
+  /** Most-recent reducer/sample value the dispatcher saw, or null pre-eval. */
+  lastValue: number | null;
+  lastEvaluatedAt: string | null;
+  lastFiredAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -451,6 +457,29 @@ export interface AlertRuleQuery {
   /** Filter to rules bound to this webhook subscription. */
   subscriptionId?: string;
   limit?: number;
+}
+
+/**
+ * Request body for `POST /v1/alert-rules`. The server mints the id and
+ * timestamps; the wire shape carries `subscriptionId` (the FK target
+ * webhook subscription) plus the discriminated config.
+ */
+export interface AlertRuleCreate {
+  subscriptionId: string;
+  name: string;
+  description?: string | null;
+  config: RuleConfig;
+}
+
+/**
+ * Request body for `PATCH /v1/alert-rules/{id}`. Every field optional;
+ * `config` is replaced wholesale (sub-field deltas not on the wire).
+ */
+export interface AlertRulePatch {
+  name?: string;
+  description?: string | null;
+  config?: RuleConfig;
+  status?: AlertRuleStatus;
 }
 
 // ---------------------------------------------------------------------------

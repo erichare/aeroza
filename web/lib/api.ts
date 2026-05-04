@@ -18,7 +18,10 @@ import {
   AeroaClient,
   type AlertFeatureCollection,
   type AlertQuery,
+  type AlertRule,
+  type AlertRuleCreate,
   type AlertRuleList,
+  type AlertRulePatch,
   type AlertRuleQuery,
   type CalibrationQuery,
   type CalibrationResponse,
@@ -59,7 +62,9 @@ export type {
   AlertFeatureCollection,
   AlertProperties,
   AlertRule,
+  AlertRuleCreate,
   AlertRuleList,
+  AlertRulePatch,
   AlertRuleQuery,
   AlertRuleStatus,
   CalibrationItem,
@@ -172,6 +177,18 @@ export function deleteWebhook(id: string): Promise<void> {
 
 export function fetchAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {
   return client.listAlertRules(query);
+}
+
+export function createAlertRule(body: AlertRuleCreate): Promise<AlertRule> {
+  return client.createAlertRule(body);
+}
+
+export function updateAlertRule(id: string, body: AlertRulePatch): Promise<AlertRule> {
+  return client.updateAlertRule(id, body);
+}
+
+export function deleteAlertRule(id: string): Promise<void> {
+  return client.deleteAlertRule(id);
 }
 
 /**
