@@ -15,6 +15,11 @@ changes will land behind a `/v2` prefix when they happen.
   `aeroza/query/v1/`. The `/v1/*` wire surface is unchanged.
 - Web `tsconfig.json` now matches the SDK's stricter flags
   (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`).
+- ESLint is wired up in both `web/` and `sdk-ts/` (was previously absent —
+  `eslint-disable` comments referenced a rule plugin that wasn't installed).
+  Web uses a hand-rolled flat config with `@typescript-eslint` +
+  `react-hooks` rules; SDK uses a similar minimal flat config. Both run
+  via `npm run lint`.
 - CI gates the unit suite on a coverage floor (`--cov-fail-under=60`) so
   it can't regress below today's level.
 
