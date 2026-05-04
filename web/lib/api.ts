@@ -24,6 +24,8 @@ import {
   type CalibrationResponse,
   type CalibrationSeriesQuery,
   type CalibrationSeriesResponse,
+  type WebhookSubscription,
+  type WebhookSubscriptionCreate,
   type WebhookSubscriptionList,
   type WebhookSubscriptionQuery,
   type Health,
@@ -75,6 +77,7 @@ export type {
   RuleConfigPolygonReducer,
   WebhookStatus,
   WebhookSubscription,
+  WebhookSubscriptionCreate,
   WebhookSubscriptionList,
   WebhookSubscriptionQuery,
   WebhookSubscriptionRedacted,
@@ -155,6 +158,16 @@ export function fetchWebhooks(
   query: WebhookSubscriptionQuery = {},
 ): Promise<WebhookSubscriptionList> {
   return client.listWebhooks(query);
+}
+
+export function createWebhook(
+  body: WebhookSubscriptionCreate,
+): Promise<WebhookSubscription> {
+  return client.createWebhook(body);
+}
+
+export function deleteWebhook(id: string): Promise<void> {
+  return client.deleteWebhook(id);
 }
 
 export function fetchAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {

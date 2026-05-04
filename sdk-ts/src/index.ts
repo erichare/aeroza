@@ -49,6 +49,7 @@ export type {
   RuleConfigPolygonReducer,
   WebhookStatus,
   WebhookSubscription,
+  WebhookSubscriptionCreate,
   WebhookSubscriptionList,
   WebhookSubscriptionQuery,
   WebhookSubscriptionRedacted,

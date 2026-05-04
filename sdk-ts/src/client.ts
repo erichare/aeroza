@@ -31,6 +31,8 @@ import type {
   MetarObservation,
   MetarObservationList,
   MetarQuery,
+  WebhookSubscription,
+  WebhookSubscriptionCreate,
   WebhookSubscriptionList,
   WebhookSubscriptionQuery,
   Health,
@@ -271,9 +273,10 @@ export class AeroaClient {
   }
 
   // -------------------------------------------------------------------------
-  // Webhooks (read-only at the moment — full CRUD lives on the server but
-  // the SDK surface only covers list for now; create/update/delete arrive
-  // alongside the dashboard editor).
+  // Webhooks. Server has full CRUD; the SDK now exposes list, create,
+  // and delete. ``createWebhook`` returns the signing ``secret`` — a
+  // one-shot, never-readable-again field, so callers should hand it
+  // to the user immediately.
 
   async listWebhooks(
     query: WebhookSubscriptionQuery = {},
@@ -284,6 +287,27 @@ export class AeroaClient {
     return this.getJson<WebhookSubscriptionList>(
       this.withQuery("/v1/webhooks", params),
     );
+  }
+
+  /**
+   * Register a new webhook subscription. The response's ``secret`` is
+   * shown only on this call; it isn't readable from later list/get
+   * responses, so keep it (we surface it once in the dashboard with
+   * a copy button, then drop it from state).
+   */
+  async createWebhook(
+    body: WebhookSubscriptionCreate,
+  ): Promise<WebhookSubscription> {
+    return this.postJson<WebhookSubscription>("/v1/webhooks", body);
+  }
+
+  /**
+   * Delete a webhook subscription by id. Server returns 204 on
+   * success; we throw on any other status. Idempotent — re-running
+   * after a previous delete returns 404 (caller catches as needed).
+   */
+  async deleteWebhook(id: string): Promise<void> {
+    await this.deleteRequest(`/v1/webhooks/${encodeURIComponent(id)}`);
   }
 
   // -------------------------------------------------------------------------
@@ -354,6 +378,36 @@ export class AeroaClient {
       cache: "no-store",
     });
     return this.parseResponse<T>(response, path);
+  }
+
+  private async deleteRequest(path: string): Promise<void> {
+    const url = `${this.apiBase}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: "DELETE",
+      headers: { Accept: "application/json", ...this.defaultHeaders },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      let detail: string | null = null;
+      try {
+        const body: unknown = await response.json();
+        if (
+          body !== null &&
+          typeof body === "object" &&
+          "detail" in body &&
+          typeof (body as { detail: unknown }).detail === "string"
+        ) {
+          detail = (body as { detail: string }).detail;
+        }
+      } catch {
+        // Non-JSON body (e.g. an empty 204 also lands here harmlessly).
+      }
+      throw new AeroaApiError(
+        response.status,
+        detail,
+        `${response.status} ${response.statusText} — ${path}`,
+      );
+    }
   }
 
   private async postJson<T>(path: string, body: unknown): Promise<T> {
