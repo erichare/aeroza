@@ -145,7 +145,7 @@ Things we know we want, but not next:
 - **NowcastNet** (deep-learning ensemble) replacing pySTEPS as the production forecaster.
 - **Production deploy assets**: K8s manifests, GitHub Container Registry images, a real `docker-compose.prod.yml`.
 - **A staged rollout / canary mechanism** for forecasters — route a fraction of traffic to a new algorithm, watch its calibration row trend before promoting.
-- **Webhooks UI in `/console`**: subscription editor, rule builder, delivery log viewer. The CRUD routes work; the UI panels don't exist yet.
+- **Webhooks UI in `/console`**: ~~subscription editor~~ (PR #69), ~~rule builder~~ (PR #70), ~~delivery log viewer~~ (this PR). The console now drives every CRUD path the server exposes for webhooks + rules, and renders the audit trail inline.
 - **`@aeroza/sdk` reference docs** — per-method docs, codegen examples, version-pinning notes. The SDK itself is published-ready; the docs page that explains it is the next doc to land.
 
 ## Out of scope (probably)

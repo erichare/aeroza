@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  type WebhookDelivery,
+  type WebhookDeliveryStatus,
   type WebhookStatus,
   type WebhookSubscription,
   type WebhookSubscriptionRedacted,
   createWebhook,
   deleteWebhook,
+  fetchWebhookDeliveries,
   fetchWebhooks,
 } from "@/lib/api";
 
@@ -21,6 +24,17 @@ const STATUS_TONE: Record<WebhookStatus, "success" | "warning" | "danger"> = {
   paused: "warning",
   disabled: "danger",
 };
+
+const DELIVERY_TONE: Record<
+  WebhookDeliveryStatus,
+  "success" | "warning" | "danger"
+> = {
+  ok: "success",
+  retrying: "warning",
+  failed: "danger",
+};
+
+const DELIVERY_LIMIT = 10;
 
 // The two NATS subjects the dispatcher fans out today. Mirrored from
 // `aeroza.webhooks.schemas.WEBHOOK_EVENT_TYPES` — keeping a hand-rolled
@@ -346,39 +360,177 @@ interface SubscriptionRowProps {
 }
 
 function SubscriptionRow({ sub, onDelete }: SubscriptionRowProps) {
+  const [showDeliveries, setShowDeliveries] = useState(false);
   return (
-    <li className="grid grid-cols-[8rem_1fr_auto] items-start gap-3 py-2.5">
-      <StatusDot tone={STATUS_TONE[sub.status]} label={sub.status} />
-      <div className="min-w-0">
-        <div className="truncate font-mono text-[12px] text-text">{sub.url}</div>
-        {sub.description ? (
-          <p className="mt-0.5 truncate text-[11px] text-muted">{sub.description}</p>
-        ) : null}
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          {sub.events.map((e) => (
-            <span
-              key={e}
-              className="rounded-md border border-border/50 bg-bg/40 px-1.5 py-0.5 font-mono text-[10px] text-muted"
+    <li className="py-2.5">
+      <div className="grid grid-cols-[8rem_1fr_auto] items-start gap-3">
+        <StatusDot tone={STATUS_TONE[sub.status]} label={sub.status} />
+        <div className="min-w-0">
+          <div className="truncate font-mono text-[12px] text-text">{sub.url}</div>
+          {sub.description ? (
+            <p className="mt-0.5 truncate text-[11px] text-muted">{sub.description}</p>
+          ) : null}
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {sub.events.map((e) => (
+              <span
+                key={e}
+                className="rounded-md border border-border/50 bg-bg/40 px-1.5 py-0.5 font-mono text-[10px] text-muted"
+              >
+                {e}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-1.5 text-right font-mono text-[10px] text-muted/70">
+          <div>{new Date(sub.createdAt).toLocaleDateString()}</div>
+          <div className="break-all">{sub.id.slice(0, 8)}…</div>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setShowDeliveries((v) => !v)}
+              aria-expanded={showDeliveries}
+              aria-label={`${showDeliveries ? "Hide" : "Show"} recent deliveries for ${sub.id}`}
+              className={[
+                "rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                showDeliveries
+                  ? "border-accent/60 text-accent"
+                  : "border-border/50 text-muted hover:border-accent/60 hover:text-accent",
+              ].join(" ")}
             >
-              {e}
-            </span>
-          ))}
+              {showDeliveries ? "Hide" : "Log"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDelete(sub.id)}
+              aria-label={`Delete webhook ${sub.id}`}
+              className="rounded-md border border-border/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted hover:border-warning/60 hover:text-warning"
+            >
+              Delete
+            </button>
+          </div>
         </div>
       </div>
-      <div className="flex flex-col items-end gap-1.5 text-right font-mono text-[10px] text-muted/70">
-        <div>{new Date(sub.createdAt).toLocaleDateString()}</div>
-        <div className="break-all">{sub.id.slice(0, 8)}…</div>
+      {showDeliveries ? <DeliveriesView subscriptionId={sub.id} /> : null}
+    </li>
+  );
+}
+
+/**
+ * Inline delivery log for one subscription. Lazy-loaded when the row's
+ * "Log" button is pressed; cached in component state until the row is
+ * collapsed. A small "Refresh" affordance lets operators re-fetch
+ * without collapsing the section. Auto-refresh is intentionally NOT
+ * wired up — the deliveries view is a debugging surface, not a
+ * dashboard tile.
+ */
+function DeliveriesView({ subscriptionId }: { subscriptionId: string }) {
+  const [items, setItems] = useState<WebhookDelivery[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchWebhookDeliveries(subscriptionId, {
+        limit: DELIVERY_LIMIT,
+      });
+      setItems(data.items);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load deliveries");
+    } finally {
+      setLoading(false);
+    }
+  }, [subscriptionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <div className="ml-[8rem] mt-2 rounded-lg border border-border/50 bg-bg/30 px-3 py-2.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
+          Recent deliveries · last {DELIVERY_LIMIT}
+        </span>
         <button
           type="button"
-          onClick={() => void onDelete(sub.id)}
-          aria-label={`Delete webhook ${sub.id}`}
-          className="rounded-md border border-border/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted hover:border-warning/60 hover:text-warning"
+          onClick={() => void load()}
+          disabled={loading}
+          className="rounded-md border border-border/50 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:border-accent/60 hover:text-accent disabled:opacity-50"
         >
-          Delete
+          {loading ? "Loading…" : "Refresh"}
         </button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning">
+          {error}
+        </div>
+      ) : null}
+
+      {!error && items !== null && items.length === 0 ? (
+        <p className="text-[11px] text-muted">
+          No deliveries yet. The dispatcher writes one row per attempt;
+          fan-out the matching event to see attempts here.
+        </p>
+      ) : null}
+
+      {items && items.length > 0 ? (
+        <ul className="divide-y divide-border/40">
+          {items.map((d) => (
+            <DeliveryRow key={d.id} delivery={d} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function DeliveryRow({ delivery }: { delivery: WebhookDelivery }) {
+  const detail = (() => {
+    if (delivery.status === "ok") {
+      return `${delivery.responseStatus ?? "?"} · ${delivery.durationMs ?? "?"}ms`;
+    }
+    if (delivery.errorReason !== null) return delivery.errorReason;
+    if (delivery.responseStatus !== null)
+      return `${delivery.responseStatus} response`;
+    return "no response captured";
+  })();
+  return (
+    <li className="grid grid-cols-[5rem_1fr_auto] items-start gap-2 py-1.5 text-[11px]">
+      <StatusDot tone={DELIVERY_TONE[delivery.status]} label={delivery.status} />
+      <div className="min-w-0">
+        <div className="font-mono text-[10px] text-muted">
+          attempt {delivery.attempt} · {delivery.eventType}
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-text" title={detail}>
+          {detail}
+        </div>
+        {delivery.responseBodyPreview && delivery.status !== "ok" ? (
+          <pre className="mt-1 max-h-24 overflow-auto rounded-md border border-border/50 bg-bg/50 p-1.5 font-mono text-[10px] text-muted">
+            {delivery.responseBodyPreview}
+          </pre>
+        ) : null}
+      </div>
+      <div
+        className="font-mono text-[10px] text-muted/70"
+        title={new Date(delivery.createdAt).toISOString()}
+      >
+        {relativeAgo(delivery.createdAt)}
       </div>
     </li>
   );
+}
+
+function relativeAgo(iso: string): string {
+  const diffSec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 function EmptyState({ onCreateClick }: { onCreateClick: () => void }) {

@@ -215,6 +215,16 @@ const ROUTES: ReadonlyArray<{ section: string; routes: ReadonlyArray<Route> }> =
           "Sets status to deleted; rows are kept so the delivery log " +
           "remains queryable.",
       },
+      {
+        method: "GET",
+        path: "/v1/webhooks/{sub_id}/deliveries",
+        summary: "Recent delivery attempts for a subscription.",
+        notes:
+          "Read-only audit trail — one row per attempt the dispatcher " +
+          "made (initial + retries), newest-first. Optional status filter " +
+          "(ok / failed / retrying). The signed payload itself is omitted " +
+          "from the wire.",
+      },
     ],
   },
   {

@@ -16,6 +16,7 @@ import {
   type MrmsGridPolygonSample,
   type MrmsGridSample,
   type Stats,
+  type WebhookDeliveryList,
 } from "../src/index";
 
 interface FakeRequest {
@@ -388,6 +389,52 @@ describe("AeroaClient.deleteAlertRule", () => {
     const client = new AeroaClient({ apiBase: API_BASE, fetch });
     await expect(client.deleteAlertRule("rule-x")).rejects.toBeInstanceOf(
       AeroaApiError,
+    );
+  });
+});
+
+describe("AeroaClient.listWebhookDeliveries", () => {
+  it("forwards status + limit to /v1/webhooks/{id}/deliveries", async () => {
+    const list: WebhookDeliveryList = {
+      type: "WebhookDeliveryList",
+      items: [
+        {
+          type: "WebhookDelivery",
+          id: "del-1",
+          subscriptionId: "sub-1",
+          ruleId: null,
+          eventType: "aeroza.alerts.nws.new",
+          status: "failed",
+          attempt: 4,
+          responseStatus: 503,
+          responseBodyPreview: "Service Unavailable",
+          errorReason: "server error: 503 Service Unavailable",
+          durationMs: 120,
+          createdAt: "2026-05-01T12:00:00Z",
+        },
+      ],
+    };
+    const { fetch, calls } = createFakeFetch(() => ({ body: list }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const result = await client.listWebhookDeliveries("sub-1", {
+      status: "failed",
+      limit: 10,
+    });
+    expect(result).toEqual(list);
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe("/v1/webhooks/sub-1/deliveries");
+    expect(url.searchParams.get("status")).toBe("failed");
+    expect(url.searchParams.get("limit")).toBe("10");
+  });
+
+  it("URL-encodes ids with reserved characters", async () => {
+    const { fetch, calls } = createFakeFetch(() => ({
+      body: { type: "WebhookDeliveryList", items: [] },
+    }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    await client.listWebhookDeliveries("id/with/slash");
+    expect(calls[0]?.url).toBe(
+      `${API_BASE}/v1/webhooks/id%2Fwith%2Fslash/deliveries`,
     );
   });
 });
