@@ -4,9 +4,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import type { AlertFeatureCollection } from "@aeroza/sdk";
+
 import {
   ApiError,
   type MrmsGridItem,
+  fetchHistoricalAlerts,
   fetchMrmsGrids,
   fetchSeedEventStatus,
   startSeedEvent,
@@ -83,6 +86,15 @@ export default function DemoPage() {
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [speed, setSpeed] = useState<PlaybackSpeed>(DEFAULT_SPEED);
+  // Historical NWS warnings for the current featured event, sourced
+  // from /v1/alerts/historical (which proxies the IEM archive). null
+  // means "not loaded for this mode" — the AlertsMap then falls back
+  // to its live-polling behaviour, which is what live-archive mode
+  // wants. Fetched once per event selection; the map filters per
+  // frame against `displayedAt` so we don't refetch as the scrubber
+  // advances.
+  const [historicalAlerts, setHistoricalAlerts] =
+    useState<AlertFeatureCollection | null>(null);
 
   // Reload the grids whenever mode changes. Mode changes are the only
   // thing that meaningfully alters the time window we want to fetch.
@@ -122,6 +134,35 @@ export default function DemoPage() {
   useEffect(() => {
     void loadGrids();
   }, [loadGrids]);
+
+  // Load historical NWS Storm-Based Warnings whenever the user picks
+  // a featured event with WFO coverage. Live-archive mode reverts to
+  // null so the live /v1/alerts polling takes over inside AlertsMap.
+  useEffect(() => {
+    if (mode.kind !== "event" || mode.event.wfos.length === 0) {
+      setHistoricalAlerts(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchHistoricalAlerts({
+          since: mode.event.startUtc,
+          until: mode.event.endUtc,
+          wfos: mode.event.wfos,
+        });
+        if (!cancelled) setHistoricalAlerts(data);
+      } catch {
+        // Best-effort overlay — radar replay is the primary signal.
+        // Silently skip on failure so a flaky IEM doesn't break the
+        // page; the map just renders without warnings.
+        if (!cancelled) setHistoricalAlerts({ type: "FeatureCollection", features: [] });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   // Drive the autoplay clock. Each tick advances the frame; we loop
   // back to the start when we hit the end so the demo runs forever.
@@ -190,6 +231,10 @@ export default function DemoPage() {
               showRadar
               radarFileKey={currentGrid?.fileKey ?? null}
               hideLegend
+              externalAlerts={historicalAlerts}
+              displayedAt={
+                currentGrid ? new Date(currentGrid.validAt) : null
+              }
             />
             {mode.kind === "event" ? (
               <CommentaryOverlay event={mode.event} />

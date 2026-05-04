@@ -532,6 +532,15 @@ export interface AlertQuery {
   limit?: number;
 }
 
+export interface HistoricalAlertQuery {
+  /** Inclusive UTC start, ISO-8601 (e.g. "2024-05-16T22:00:00Z"). */
+  since: string;
+  /** Exclusive UTC end, ISO-8601. */
+  until: string;
+  /** NWS forecast office 3-letter codes, e.g. ["HGX", "LCH"]. At least one. */
+  wfos: ReadonlyArray<string>;
+}
+
 export interface MrmsQuery {
   product?: string;
   level?: string;

@@ -55,6 +55,18 @@ export interface FeaturedEvent {
    * radar is suppressed with a clear "pre-MRMS" badge.
    */
   replayable: boolean;
+  /**
+   * NWS Weather Forecast Office 3-letter codes that cover the event's
+   * bbox. Used by /demo to query the IEM historical-warnings archive
+   * (`GET /v1/alerts/historical?wfos=...`). Pick the WFOs whose CWA
+   * (county warning area) overlaps the bbox — IEM filters strictly by
+   * issuing office, so missing one means missing every warning that
+   * office issued. https://www.weather.gov/srh/nwsoffices for the map.
+   *
+   * Empty array = skip the historical-alerts overlay (e.g. for
+   * pre-MRMS events where the radar replay isn't available either).
+   */
+  wfos: ReadonlyArray<string>;
   /** One-line summary for the picker tile. */
   summary: string;
   /** Multi-paragraph commentary shown alongside the map. */
@@ -73,6 +85,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2024-05-17T02:30:00Z",
     bbox: [-97.5, 28.5, -94.0, 31.0],
     replayable: true,
+    wfos: ["HGX", "LCH"],
     summary:
       "A long-track derecho with hurricane-force gusts tore across Houston, killing 8 and leaving over 900,000 without power.",
     commentary: [
@@ -94,6 +107,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2024-01-13T18:00:00Z",
     bbox: [-100.0, 38.5, -86.0, 46.0],
     replayable: true,
+    wfos: ["DMX", "OAX", "MPX", "ARX"],
     summary:
       "A fast-moving cyclone dragged Arctic air across the Plains on NFL Wild Card weekend; wind chills hit -50°F and the storm-related death toll exceeded 80.",
     commentary: [
@@ -115,6 +129,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2023-03-25T06:00:00Z",
     bbox: [-92.5, 31.0, -86.5, 35.5],
     replayable: true,
+    wfos: ["JAN", "MEG", "BMX", "MOB"],
     summary:
       "A long-track EF-4 tornado obliterated Rolling Fork, MS — part of an outbreak that produced 24 confirmed tornadoes across the Deep South.",
     commentary: [
@@ -136,6 +151,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2022-12-24T18:00:00Z",
     bbox: [-80.0, 42.0, -77.0, 44.0],
     replayable: true,
+    wfos: ["BUF"],
     summary:
       "A 967-mb bomb cyclone whipped lake-effect snow into a multi-day blizzard that buried Buffalo under 50+ inches and killed 47 in Erie County alone.",
     commentary: [
@@ -157,6 +173,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2021-12-11T08:00:00Z",
     bbox: [-92.0, 34.5, -85.5, 38.5],
     replayable: true,
+    wfos: ["PAH", "LZK", "MEG", "LMK"],
     summary:
       "An exceptionally long-track tornado carved a 165-mile path through four states on a December evening — well outside traditional tornado season.",
     commentary: [
@@ -178,6 +195,7 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2021-02-15T18:00:00Z",
     bbox: [-103.0, 26.0, -93.0, 36.5],
     replayable: true,
+    wfos: ["FWD", "HGX", "EWX", "LUB", "MAF"],
     summary:
       "Arctic air drove temperatures below 0°F across Texas, triggering the cascading ERCOT grid failure. 246 confirmed deaths.",
     commentary: [
@@ -199,6 +217,10 @@ export const FEATURED_EVENTS: ReadonlyArray<FeaturedEvent> = [
     endUtc: "2011-04-28T02:00:00Z",
     bbox: [-91.0, 30.5, -83.0, 36.0],
     replayable: false,
+    // Pre-MRMS — radar replay disabled. WFOs left populated so the
+    // historical-alerts overlay still works if a future enhancement
+    // shows the warning timeline alongside the commentary card.
+    wfos: ["BMX", "HUN", "MEG", "JAN"],
     summary:
       "The most prolific tornado outbreak in US history: 360+ tornadoes over four days, including 15 EF-4s and four EF-5s. 324 dead.",
     commentary: [

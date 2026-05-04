@@ -21,6 +21,7 @@ import type {
   AlertDetailFeature,
   AlertFeatureCollection,
   AlertQuery,
+  HistoricalAlertQuery,
   AlertRule,
   AlertRuleCreate,
   AlertRuleList,
@@ -145,6 +146,27 @@ export class AeroaClient {
   async getAlert(alertId: string): Promise<AlertDetailFeature> {
     return this.getJson<AlertDetailFeature>(
       `/v1/alerts/${encodeURIComponent(alertId)}`,
+    );
+  }
+
+  /**
+   * List historical NWS Storm-Based Warnings issued during a UTC window
+   * for one or more forecast offices, sourced from the IEM archive.
+   * Used by the /demo Storm Replay to overlay the warnings that were
+   * actually in force during a featured event — NWS's own /alerts
+   * endpoint only retains the last ~30 days, which doesn't cover the
+   * 2021–2024 events in the catalog.
+   */
+  async listHistoricalAlerts(
+    query: HistoricalAlertQuery,
+  ): Promise<AlertFeatureCollection> {
+    const params = new URLSearchParams({
+      since: query.since,
+      until: query.until,
+      wfos: query.wfos.join(","),
+    });
+    return this.getJson<AlertFeatureCollection>(
+      this.withQuery("/v1/alerts/historical", params),
     );
   }
 
