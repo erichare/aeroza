@@ -19,9 +19,6 @@ build
 node_modules
 .next
 data
-docs
-README.md
-LICENSE
 docker-compose.yml
 docker-compose.override.yml
 Dockerfile
