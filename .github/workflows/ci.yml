@@ -44,7 +44,11 @@ jobs:
         run: uv run mypy aeroza
 
       - name: Run unit tests
-        run: uv run pytest -m "not integration" --cov=aeroza --cov-report=xml --cov-report=term
+        # Coverage floor for the unit-only suite. Integration tests in the
+        # next job push the combined number much higher; this gate exists
+        # to prevent the unit suite from regressing below today's level.
+        # Ratchet up as unit coverage improves.
+        run: uv run pytest -m "not integration" --cov=aeroza --cov-report=xml --cov-report=term --cov-fail-under=60
 
       - name: Upload coverage
         if: always()

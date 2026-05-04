@@ -1,5 +1,5 @@
 /**
- * Unit tests for AeroaClient.
+ * Unit tests for AerozaClient.
  *
  * Stubs `fetch` with an in-process function that asserts on the request
  * URL / headers and returns canned JSON. No live API, no MSW — the
@@ -10,8 +10,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AeroaApiError,
-  AeroaClient,
+  AerozaApiError,
+  AerozaClient,
   type AlertRule,
   type MrmsGridPolygonSample,
   type MrmsGridSample,
@@ -49,12 +49,12 @@ function createFakeFetch(
 
 const API_BASE = "http://localhost:8000";
 
-describe("AeroaClient construction", () => {
+describe("AerozaClient construction", () => {
   it("strips trailing slashes from apiBase", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: { status: "ok", version: "0.1.0" },
     }));
-    const client = new AeroaClient({ apiBase: `${API_BASE}/`, fetch });
+    const client = new AerozaClient({ apiBase: `${API_BASE}/`, fetch });
     await client.getHealth();
     expect(calls[0]?.url).toBe(`${API_BASE}/health`);
   });
@@ -63,7 +63,7 @@ describe("AeroaClient construction", () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: { status: "ok", version: "0.1.0" },
     }));
-    const client = new AeroaClient({
+    const client = new AerozaClient({
       apiBase: API_BASE,
       fetch,
       defaultHeaders: { "x-aeroza-trace": "abc-123" },
@@ -75,7 +75,7 @@ describe("AeroaClient construction", () => {
   });
 });
 
-describe("AeroaClient.getStats", () => {
+describe("AerozaClient.getStats", () => {
   it("decodes the Stats envelope", async () => {
     const stats: Stats = {
       type: "Stats",
@@ -90,17 +90,17 @@ describe("AeroaClient.getStats", () => {
       },
     };
     const { fetch } = createFakeFetch(() => ({ body: stats }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await expect(client.getStats()).resolves.toEqual(stats);
   });
 });
 
-describe("AeroaClient.listAlerts", () => {
+describe("AerozaClient.listAlerts", () => {
   it("includes severity, bbox, point, and limit when set", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: { type: "FeatureCollection", features: [] },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.listAlerts({
       severity: "Severe",
       bbox: "-100,30,-99,31",
@@ -119,13 +119,13 @@ describe("AeroaClient.listAlerts", () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: { type: "FeatureCollection", features: [] },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.listAlerts();
     expect(calls[0]?.url).toBe(`${API_BASE}/v1/alerts`);
   });
 });
 
-describe("AeroaClient.getAlert", () => {
+describe("AerozaClient.getAlert", () => {
   it("URL-encodes alert ids that contain reserved chars", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: {
@@ -149,7 +149,7 @@ describe("AeroaClient.getAlert", () => {
         },
       },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.getAlert("urn:oid:2.49.0.1.840.0.abc");
     expect(calls[0]?.url).toBe(
       `${API_BASE}/v1/alerts/urn%3Aoid%3A2.49.0.1.840.0.abc`,
@@ -157,14 +157,14 @@ describe("AeroaClient.getAlert", () => {
   });
 });
 
-describe("AeroaClient.alertsStreamUrl", () => {
+describe("AerozaClient.alertsStreamUrl", () => {
   it("builds a fully qualified SSE URL", () => {
-    const client = new AeroaClient({ apiBase: API_BASE });
+    const client = new AerozaClient({ apiBase: API_BASE });
     expect(client.alertsStreamUrl()).toBe(`${API_BASE}/v1/alerts/stream`);
   });
 });
 
-describe("AeroaClient.getMrmsGrid", () => {
+describe("AerozaClient.getMrmsGrid", () => {
   it("preserves slashes in the file_key path segment", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: {
@@ -181,7 +181,7 @@ describe("AeroaClient.getMrmsGrid", () => {
         materialisedAt: "2026-05-01T12:01:00Z",
       },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.getMrmsGrid("CONUS/X_00.50/20260501/MRMS_X.grib2.gz");
     expect(calls[0]?.url).toBe(
       `${API_BASE}/v1/mrms/grids/CONUS/X_00.50/20260501/MRMS_X.grib2.gz`,
@@ -189,7 +189,7 @@ describe("AeroaClient.getMrmsGrid", () => {
   });
 });
 
-describe("AeroaClient.sampleGrid", () => {
+describe("AerozaClient.sampleGrid", () => {
   it("camelCase atTime maps to snake_case at_time on the wire", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: {
@@ -207,7 +207,7 @@ describe("AeroaClient.sampleGrid", () => {
         toleranceDeg: 0.05,
       } satisfies MrmsGridSample,
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.sampleGrid({
       lat: 20.5,
       lng: -99.5,
@@ -220,7 +220,7 @@ describe("AeroaClient.sampleGrid", () => {
   });
 });
 
-describe("AeroaClient.reduceGridOverPolygon", () => {
+describe("AerozaClient.reduceGridOverPolygon", () => {
   it("forwards reducer + threshold + product/level", async () => {
     const polygonResponse: MrmsGridPolygonSample = {
       type: "MrmsGridPolygonSample",
@@ -240,7 +240,7 @@ describe("AeroaClient.reduceGridOverPolygon", () => {
       bboxMaxLongitude: -95.0,
     };
     const { fetch, calls } = createFakeFetch(() => ({ body: polygonResponse }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     const result = await client.reduceGridOverPolygon({
       polygon: "-95.7,29.5,-95.0,29.5,-95.0,30.0,-95.7,30.0",
       reducer: "count_ge",
@@ -258,7 +258,7 @@ describe("AeroaClient.reduceGridOverPolygon", () => {
   });
 });
 
-describe("AeroaClient.createAlertRule", () => {
+describe("AerozaClient.createAlertRule", () => {
   it("POSTs the payload to /v1/alert-rules and returns the created rule", async () => {
     const created: AlertRule = {
       type: "AlertRule",
@@ -286,7 +286,7 @@ describe("AeroaClient.createAlertRule", () => {
       status: 201,
       body: created,
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     const result = await client.createAlertRule({
       subscriptionId: created.subscriptionId,
       name: created.name,
@@ -305,7 +305,7 @@ describe("AeroaClient.createAlertRule", () => {
   });
 });
 
-describe("AeroaClient.updateAlertRule", () => {
+describe("AerozaClient.updateAlertRule", () => {
   it("PATCHes the payload to /v1/alert-rules/{id}", async () => {
     const updated: AlertRule = {
       type: "AlertRule",
@@ -330,7 +330,7 @@ describe("AeroaClient.updateAlertRule", () => {
       updatedAt: "2026-05-01T12:00:00Z",
     };
     const { fetch, calls } = createFakeFetch(() => ({ body: updated }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     const result = await client.updateAlertRule("rule-1", { status: "paused" });
     expect(result).toEqual(updated);
     expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/rule-1`);
@@ -363,37 +363,37 @@ describe("AeroaClient.updateAlertRule", () => {
         updatedAt: "2026-05-01T11:00:00Z",
       },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.updateAlertRule("id/with/slash", { name: "x" });
     expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/id%2Fwith%2Fslash`);
   });
 });
 
-describe("AeroaClient.deleteAlertRule", () => {
+describe("AerozaClient.deleteAlertRule", () => {
   it("DELETEs /v1/alert-rules/{id} and resolves on 204", async () => {
     const { fetch, calls } = createFakeFetch(() => ({
       status: 204,
       body: undefined,
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.deleteAlertRule("rule-1");
     expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/rule-1`);
     expect(calls[0]?.init.method).toBe("DELETE");
   });
 
-  it("throws AeroaApiError when the rule isn't found", async () => {
+  it("throws AerozaApiError when the rule isn't found", async () => {
     const { fetch } = createFakeFetch(() => ({
       status: 404,
       body: { detail: "alert rule rule-x not found" },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await expect(client.deleteAlertRule("rule-x")).rejects.toBeInstanceOf(
-      AeroaApiError,
+      AerozaApiError,
     );
   });
 });
 
-describe("AeroaClient.listWebhookDeliveries", () => {
+describe("AerozaClient.listWebhookDeliveries", () => {
   it("forwards status + limit to /v1/webhooks/{id}/deliveries", async () => {
     const list: WebhookDeliveryList = {
       type: "WebhookDeliveryList",
@@ -415,7 +415,7 @@ describe("AeroaClient.listWebhookDeliveries", () => {
       ],
     };
     const { fetch, calls } = createFakeFetch(() => ({ body: list }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     const result = await client.listWebhookDeliveries("sub-1", {
       status: "failed",
       limit: 10,
@@ -431,7 +431,7 @@ describe("AeroaClient.listWebhookDeliveries", () => {
     const { fetch, calls } = createFakeFetch(() => ({
       body: { type: "WebhookDeliveryList", items: [] },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     await client.listWebhookDeliveries("id/with/slash");
     expect(calls[0]?.url).toBe(
       `${API_BASE}/v1/webhooks/id%2Fwith%2Fslash/deliveries`,
@@ -439,19 +439,19 @@ describe("AeroaClient.listWebhookDeliveries", () => {
   });
 });
 
-describe("AeroaApiError", () => {
+describe("AerozaApiError", () => {
   it("uses the FastAPI detail field as the error message", async () => {
     const { fetch } = createFakeFetch(() => ({
       status: 404,
       body: { detail: "no cell within 0.05° of (lat=50, lng=-50)" },
     }));
-    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch });
     try {
       await client.sampleGrid({ lat: 50, lng: -50 });
-      expect.unreachable("expected AeroaApiError");
+      expect.unreachable("expected AerozaApiError");
     } catch (err) {
-      expect(err).toBeInstanceOf(AeroaApiError);
-      const apiErr = err as AeroaApiError;
+      expect(err).toBeInstanceOf(AerozaApiError);
+      const apiErr = err as AerozaApiError;
       expect(apiErr.status).toBe(404);
       expect(apiErr.detail).toContain("no cell within");
       expect(apiErr.message).toContain("no cell within");
@@ -465,12 +465,12 @@ describe("AeroaApiError", () => {
         statusText: "Internal Server Error",
         headers: { "content-type": "text/plain" },
       });
-    const client = new AeroaClient({ apiBase: API_BASE, fetch: fakeFetch });
+    const client = new AerozaClient({ apiBase: API_BASE, fetch: fakeFetch });
     try {
       await client.getStats();
-      expect.unreachable("expected AeroaApiError");
+      expect.unreachable("expected AerozaApiError");
     } catch (err) {
-      const apiErr = err as AeroaApiError;
+      const apiErr = err as AerozaApiError;
       expect(apiErr.status).toBe(500);
       expect(apiErr.detail).toBeNull();
       expect(apiErr.message).toContain("500");

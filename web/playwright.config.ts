@@ -42,17 +42,19 @@ export default defineConfig({
     },
   ],
 
-  webServer: REUSE_SERVER
-    ? undefined
+  ...(REUSE_SERVER
+    ? {}
     : {
         // Build + start once at the start of the run; Playwright tears it
         // down at the end. Using `next start` rather than `next dev`
         // because the dev server's HMR overlay sometimes fights the test.
-        command: `npm run build && npm run start -- --port ${PORT}`,
-        url: BASE_URL,
-        reuseExistingServer: !process.env.CI,
-        timeout: 180_000,
-        stdout: "ignore",
-        stderr: "pipe",
-      },
+        webServer: {
+          command: `npm run build && npm run start -- --port ${PORT}`,
+          url: BASE_URL,
+          reuseExistingServer: !process.env.CI,
+          timeout: 180_000,
+          stdout: "ignore" as const,
+          stderr: "pipe" as const,
+        },
+      }),
 });

@@ -228,8 +228,9 @@ function CreateForm({ onCreated, onError }: CreateFormProps) {
         setSubscriptions(data.items);
         // Pre-select the first one — most rules are bound to whichever
         // subscription you just created.
-        if (data.items.length > 0) {
-          setSubscriptionId(data.items[0].id);
+        const first = data.items[0];
+        if (first) {
+          setSubscriptionId(first.id);
         }
       } catch (err) {
         if (!cancelled) {

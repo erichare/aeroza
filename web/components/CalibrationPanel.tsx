@@ -423,7 +423,7 @@ function CalibrationCell({
         <Sparkline
           values={sparkValues}
           yMin={0}
-          yMax={sparkYMax}
+          {...(sparkYMax !== undefined ? { yMax: sparkYMax } : {})}
           width={120}
           height={20}
           label={`${metric.toUpperCase()} trend for ${cell.algorithm} at ${cell.forecastHorizonMinutes} min`}

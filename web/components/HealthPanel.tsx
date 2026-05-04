@@ -107,9 +107,7 @@ export function HealthPanel() {
             <Stat
               label="pending"
               value={String(stats?.mrms.filesPending ?? "—")}
-              tone={
-                stats && stats.mrms.filesPending > 0 ? "warning" : undefined
-              }
+              {...(stats && stats.mrms.filesPending > 0 ? { tone: "warning" as const } : {})}
             />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3">

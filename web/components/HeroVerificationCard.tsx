@@ -312,11 +312,12 @@ function pickHeadline(
   const sortedEnsemble = [...items]
     .filter((i) => i.brierMean !== null)
     .sort((a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes);
-  if (sortedEnsemble.length > 0 && sortedEnsemble[0].brierMean !== null) {
+  const ensembleHead = sortedEnsemble[0];
+  if (ensembleHead && ensembleHead.brierMean !== null) {
     return {
-      row: sortedEnsemble[0],
+      row: ensembleHead,
       kind: "brier",
-      value: sortedEnsemble[0].brierMean,
+      value: ensembleHead.brierMean,
     };
   }
 
@@ -333,6 +334,7 @@ function pickHeadline(
   const fallback = [...items].sort(
     (a, b) => a.forecastHorizonMinutes - b.forecastHorizonMinutes,
   )[0];
+  if (!fallback) return null;
   return { row: fallback, kind: "mae", value: fallback.maeMean };
 }
 
@@ -353,8 +355,9 @@ function sortRows(
 
 function labelFor(algorithm: string): string {
   // Capitalize for human-readable display without doing translation.
-  if (algorithm.length === 0) return algorithm;
-  return algorithm[0].toUpperCase() + algorithm.slice(1);
+  const first = algorithm[0];
+  if (!first) return algorithm;
+  return first.toUpperCase() + algorithm.slice(1);
 }
 
 function formatCount(n: number): string {

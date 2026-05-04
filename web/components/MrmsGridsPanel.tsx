@@ -25,8 +25,8 @@ export function MrmsGridsPanel() {
       try {
         setLoading(true);
         const data = await fetchMrmsGrids({
-          product: product || undefined,
-          level: level || undefined,
+          ...(product ? { product } : {}),
+          ...(level ? { level } : {}),
           limit: DEFAULT_LIMIT,
         });
         if (cancelled) return;

@@ -38,7 +38,13 @@ export function Sparkline({
   label,
 }: SparklineProps) {
   const path = useMemo(
-    () => buildPath(values, { width, height, yMin, yMax }),
+    () =>
+      buildPath(values, {
+        width,
+        height,
+        ...(yMin !== undefined ? { yMin } : {}),
+        ...(yMax !== undefined ? { yMax } : {}),
+      }),
     [values, width, height, yMin, yMax],
   );
 
@@ -150,7 +156,10 @@ function buildPath(
   // Area = polyline + drop down to baseline at first/last.
   const baseline = padY + usableH;
   const first = longest[0];
-  const last = longest.at(-1)!;
+  const last = longest.at(-1);
+  if (!first || !last) {
+    return { linePoints: null, areaPath: "", lastPoint: null };
+  }
   const areaPath = [
     `M ${first.x} ${baseline}`,
     `L ${first.x} ${first.y}`,

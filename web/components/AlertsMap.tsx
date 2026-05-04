@@ -315,7 +315,6 @@ export function AlertsMap({
           // A missing/bad state-borders file shouldn't break the map —
           // log to the console for debugging and continue without
           // borders. The radar + alerts layers carry the rest of the UX.
-          // eslint-disable-next-line no-console
           console.warn("us-states.load_failed", err);
         });
 
@@ -375,11 +374,11 @@ export function AlertsMap({
         const features = map.queryRenderedFeatures(e.point, {
           layers: [FILL_LAYER_ID],
         });
-        if (features.length === 0) {
+        const f = features[0];
+        if (!f) {
           setSelected(null);
           return;
         }
-        const f = features[0];
         // queryRenderedFeatures strips Polygon/MultiPolygon arrays into a JSON
         // string under feature.properties — but our props are flat scalars,
         // so we coerce back to the typed shape used by the side panel.
@@ -408,6 +407,12 @@ export function AlertsMap({
         mapRef.current = null;
       }
     };
+    // `radarFileKey` and `showRadar` are read here only to seed the
+    // initial map state. Subsequent changes are picked up by the
+    // sibling effects below — re-running this init effect would tear
+    // down and recreate the entire map on every prop change, which is
+    // exactly what we don't want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBounds]);
 
   // Poll /v1/alerts on a timer; replace the GeoJSON source data each tick.
