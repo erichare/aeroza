@@ -89,6 +89,11 @@ from aeroza.query.alerts import (
     find_alert_by_id,
 )
 from aeroza.query.dependencies import SubscriberDep, get_session
+from aeroza.query.historical_alerts import (
+    HistoricalAlertQuery,
+    fetch_historical_alerts,
+    parse_wfo_list,
+)
 from aeroza.query.metar import (
     DEFAULT_LIMIT as METAR_DEFAULT_LIMIT,
 )
@@ -277,6 +282,65 @@ async def stream_alerts(subscriber: SubscriberDep) -> StreamingResponse:
         _alert_event_stream(subscriber),
         media_type=SSE_MEDIA_TYPE,
         headers=SSE_HEADERS,
+    )
+
+
+@router.get(
+    "/alerts/historical",
+    response_model=AlertFeatureCollection,
+    response_model_exclude_none=True,
+    summary="List historical NWS Storm-Based Warnings (IEM archive)",
+    description=(
+        "Returns NWS Storm-Based Warnings (tornado, severe thunderstorm, "
+        "flash flood, marine, etc.) issued during the supplied UTC window, "
+        "filtered to one or more NWS forecast offices (``wfos``). Powered "
+        "by the Iowa Environmental Mesonet archive, which retains every "
+        "warning polygon back to 2002 — well beyond NWS's own ~30-day "
+        "retention. Returns the same GeoJSON ``FeatureCollection`` shape "
+        "as ``GET /v1/alerts`` so the same map renderer works."
+    ),
+)
+async def list_historical_alerts(
+    since: Annotated[
+        datetime,
+        Query(
+            description="Inclusive UTC window start (ISO-8601, with Z or offset)",
+            examples=["2024-05-16T22:00:00Z"],
+        ),
+    ],
+    until: Annotated[
+        datetime,
+        Query(
+            description="Exclusive UTC window end (ISO-8601, with Z or offset)",
+            examples=["2024-05-17T02:30:00Z"],
+        ),
+    ],
+    wfos: Annotated[
+        str,
+        Query(
+            description=(
+                "Comma-separated NWS forecast office 3-letter codes (e.g. "
+                "'HGX,LCH'). At least one is required so we don't ship "
+                "CONUS-wide history through one process."
+            ),
+            min_length=3,
+            examples=["HGX,LCH"],
+        ),
+    ],
+) -> AlertFeatureCollection:
+    if until <= since:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="until must be strictly after since",
+        )
+    parsed_wfos = parse_wfo_list(wfos)
+    if not parsed_wfos:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="at least one valid WFO code is required",
+        )
+    return await fetch_historical_alerts(
+        HistoricalAlertQuery(since=since, until=until, wfos=parsed_wfos),
     )
 
 

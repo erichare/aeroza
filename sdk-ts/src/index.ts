@@ -30,6 +30,7 @@ export type {
   AlertProperties,
   AlertQuery,
   AlertsStats,
+  HistoricalAlertQuery,
   CalibrationItem,
   CalibrationQuery,
   CalibrationResponse,

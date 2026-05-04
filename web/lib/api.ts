@@ -133,6 +133,12 @@ export function fetchAlerts(
   return client.listAlerts(query);
 }
 
+export function fetchHistoricalAlerts(
+  query: import("@aeroza/sdk").HistoricalAlertQuery,
+): Promise<AlertFeatureCollection> {
+  return client.listHistoricalAlerts(query);
+}
+
 export function fetchMrmsFiles(query: MrmsQuery = {}): Promise<MrmsFileList> {
   return client.listMrmsFiles(query);
 }

@@ -132,6 +132,18 @@ interface AlertsMapProps {
    * crowd the smaller viewport.
    */
   hideLegend?: boolean;
+  /**
+   * Caller-supplied alert collection. When set, the map renders these
+   * features instead of polling ``/v1/alerts``. Used by /demo to show
+   * the historical NWS warnings that were in force during a featured
+   * event — the live `/v1/alerts` endpoint only carries currently-active
+   * alerts and would always be empty for past windows.
+   *
+   * `displayedAt` still applies — the same active-at-time filter runs
+   * against whichever source is in play. Pass `null` to fall back to
+   * the live polling behaviour.
+   */
+  externalAlerts?: AlertFeatureCollection | null;
   onLoaded?: (collection: AlertFeatureCollection) => void;
 }
 
@@ -164,6 +176,7 @@ export function AlertsMap({
   radarFileKey = null,
   prefetchNextFileKey = null,
   hideLegend = false,
+  externalAlerts = null,
   onLoaded,
 }: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -398,8 +411,12 @@ export function AlertsMap({
   }, [initialBounds]);
 
   // Poll /v1/alerts on a timer; replace the GeoJSON source data each tick.
+  // Skipped entirely when the caller supplies `externalAlerts` — those
+  // are managed by the sibling effect below and re-fetching live alerts
+  // on top of historical ones would just flicker the map.
   useEffect(() => {
     if (!ready) return;
+    if (externalAlerts !== null) return;
     let cancelled = false;
 
     const refresh = async () => {
@@ -426,7 +443,22 @@ export function AlertsMap({
     // `displayedAt` is intentionally omitted — the dedicated effect below
     // re-filters from cache without a network round trip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, onLoaded]);
+  }, [ready, onLoaded, externalAlerts]);
+
+  // External (caller-supplied) alerts. Replaces the polled collection
+  // entirely while in scope; reverts to the live polling effect when
+  // the prop goes back to null.
+  useEffect(() => {
+    if (!ready) return;
+    if (externalAlerts === null) return;
+    lastCollectionRef.current = externalAlerts;
+    applyToSource(externalAlerts, displayedAt ?? null);
+    setError(null);
+    onLoaded?.(externalAlerts);
+    // `displayedAt` re-application is handled by the dedicated effect
+    // below so this one only runs on actual collection swaps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, externalAlerts]);
 
   // Re-apply the filter whenever the scrubbed time changes, using the cached
   // last collection. No re-fetch needed.
