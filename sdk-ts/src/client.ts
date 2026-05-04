@@ -21,7 +21,10 @@ import type {
   AlertDetailFeature,
   AlertFeatureCollection,
   AlertQuery,
+  AlertRule,
+  AlertRuleCreate,
   AlertRuleList,
+  AlertRulePatch,
   AlertRuleQuery,
   CalibrationQuery,
   CalibrationResponse,
@@ -311,7 +314,10 @@ export class AeroaClient {
   }
 
   // -------------------------------------------------------------------------
-  // Alert rules
+  // Alert rules. Server has full CRUD; the SDK exposes list, create,
+  // update, and delete. Each rule is bound to a webhook subscription
+  // (the FK target). Status transitions go through ``updateAlertRule``
+  // — there's no dedicated pause/resume route.
 
   async listAlertRules(query: AlertRuleQuery = {}): Promise<AlertRuleList> {
     const params = new URLSearchParams();
@@ -319,6 +325,34 @@ export class AeroaClient {
     if (query.subscriptionId) params.set("subscriptionId", query.subscriptionId);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
     return this.getJson<AlertRuleList>(this.withQuery("/v1/alert-rules", params));
+  }
+
+  /**
+   * Create a new alert rule bound to an existing webhook subscription.
+   * The server validates ``subscriptionId`` exists and 404s if not.
+   */
+  async createAlertRule(body: AlertRuleCreate): Promise<AlertRule> {
+    return this.postJson<AlertRule>("/v1/alert-rules", body);
+  }
+
+  /**
+   * Patch an existing rule. Every field on ``body`` is optional;
+   * ``config`` (when present) is replaced wholesale. Used for
+   * pause/resume by patching ``status`` alone.
+   */
+  async updateAlertRule(id: string, body: AlertRulePatch): Promise<AlertRule> {
+    return this.patchJson<AlertRule>(
+      `/v1/alert-rules/${encodeURIComponent(id)}`,
+      body,
+    );
+  }
+
+  /**
+   * Delete an alert rule by id. Server returns 204 on success;
+   * idempotent — a second delete returns 404 (caller catches as needed).
+   */
+  async deleteAlertRule(id: string): Promise<void> {
+    await this.deleteRequest(`/v1/alert-rules/${encodeURIComponent(id)}`);
   }
 
   // -------------------------------------------------------------------------
@@ -414,6 +448,21 @@ export class AeroaClient {
     const url = `${this.apiBase}${path}`;
     const response = await this.fetchImpl(url, {
       method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...this.defaultHeaders,
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    return this.parseResponse<T>(response, path);
+  }
+
+  private async patchJson<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.apiBase}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: "PATCH",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",

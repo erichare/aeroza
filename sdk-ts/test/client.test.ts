@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   AeroaApiError,
   AeroaClient,
+  type AlertRule,
   type MrmsGridPolygonSample,
   type MrmsGridSample,
   type Stats,
@@ -253,6 +254,141 @@ describe("AeroaClient.reduceGridOverPolygon", () => {
     expect(url.searchParams.get("threshold")).toBe("40");
     expect(url.searchParams.get("product")).toBe("MergedReflectivityComposite");
     expect(url.searchParams.get("level")).toBe("00.50");
+  });
+});
+
+describe("AeroaClient.createAlertRule", () => {
+  it("POSTs the payload to /v1/alert-rules and returns the created rule", async () => {
+    const created: AlertRule = {
+      type: "AlertRule",
+      id: "11111111-1111-1111-1111-111111111111",
+      subscriptionId: "22222222-2222-2222-2222-222222222222",
+      name: "Houston TX 35dBZ",
+      description: null,
+      status: "active",
+      config: {
+        type: "point",
+        product: "MergedReflectivityComposite",
+        level: "00.50",
+        predicate: { op: ">=", threshold: 35 },
+        lat: 29.76,
+        lng: -95.37,
+      },
+      currentlyFiring: false,
+      lastValue: null,
+      lastEvaluatedAt: null,
+      lastFiredAt: null,
+      createdAt: "2026-05-01T12:00:00Z",
+      updatedAt: "2026-05-01T12:00:00Z",
+    };
+    const { fetch, calls } = createFakeFetch(() => ({
+      status: 201,
+      body: created,
+    }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const result = await client.createAlertRule({
+      subscriptionId: created.subscriptionId,
+      name: created.name,
+      config: created.config,
+    });
+    expect(result).toEqual(created);
+    expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules`);
+    expect(calls[0]?.init.method).toBe("POST");
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({
+      subscriptionId: created.subscriptionId,
+      name: created.name,
+      config: created.config,
+    });
+  });
+});
+
+describe("AeroaClient.updateAlertRule", () => {
+  it("PATCHes the payload to /v1/alert-rules/{id}", async () => {
+    const updated: AlertRule = {
+      type: "AlertRule",
+      id: "rule-1",
+      subscriptionId: "sub-1",
+      name: "Updated rule",
+      description: null,
+      status: "paused",
+      config: {
+        type: "point",
+        product: "MergedReflectivityComposite",
+        level: "00.50",
+        predicate: { op: ">=", threshold: 40 },
+        lat: 29.76,
+        lng: -95.37,
+      },
+      currentlyFiring: false,
+      lastValue: 12.3,
+      lastEvaluatedAt: "2026-05-01T12:00:00Z",
+      lastFiredAt: null,
+      createdAt: "2026-05-01T11:00:00Z",
+      updatedAt: "2026-05-01T12:00:00Z",
+    };
+    const { fetch, calls } = createFakeFetch(() => ({ body: updated }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    const result = await client.updateAlertRule("rule-1", { status: "paused" });
+    expect(result).toEqual(updated);
+    expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/rule-1`);
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ status: "paused" });
+  });
+
+  it("URL-encodes ids with reserved characters", async () => {
+    const { fetch, calls } = createFakeFetch(() => ({
+      body: {
+        type: "AlertRule",
+        id: "id/with/slash",
+        subscriptionId: "sub-1",
+        name: "x",
+        description: null,
+        status: "active",
+        config: {
+          type: "point",
+          product: "p",
+          level: "l",
+          predicate: { op: ">", threshold: 0 },
+          lat: 0,
+          lng: 0,
+        },
+        currentlyFiring: false,
+        lastValue: null,
+        lastEvaluatedAt: null,
+        lastFiredAt: null,
+        createdAt: "2026-05-01T11:00:00Z",
+        updatedAt: "2026-05-01T11:00:00Z",
+      },
+    }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    await client.updateAlertRule("id/with/slash", { name: "x" });
+    expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/id%2Fwith%2Fslash`);
+  });
+});
+
+describe("AeroaClient.deleteAlertRule", () => {
+  it("DELETEs /v1/alert-rules/{id} and resolves on 204", async () => {
+    const { fetch, calls } = createFakeFetch(() => ({
+      status: 204,
+      body: undefined,
+    }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    await client.deleteAlertRule("rule-1");
+    expect(calls[0]?.url).toBe(`${API_BASE}/v1/alert-rules/rule-1`);
+    expect(calls[0]?.init.method).toBe("DELETE");
+  });
+
+  it("throws AeroaApiError when the rule isn't found", async () => {
+    const { fetch } = createFakeFetch(() => ({
+      status: 404,
+      body: { detail: "alert rule rule-x not found" },
+    }));
+    const client = new AeroaClient({ apiBase: API_BASE, fetch });
+    await expect(client.deleteAlertRule("rule-x")).rejects.toBeInstanceOf(
+      AeroaApiError,
+    );
   });
 });
 
