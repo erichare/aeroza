@@ -296,6 +296,31 @@ async def test_accept_image_webp_returns_webp_with_vary_header(
     assert response.content[8:12] == b"WEBP"
 
 
+async def test_off_grid_tile_short_circuits_to_transparent_bytes(
+    api_client: AsyncClient, integration_db: Database, tmp_path: Path
+) -> None:
+    """Tiles that sit fully outside the materialised grid's coverage
+    skip the PNG/WebP encode path and reuse the precomputed
+    transparent tile. The render function detects ``alpha == 0``
+    everywhere and returns
+    :func:`aeroza.tiles.raster.transparent_tile_bytes` verbatim — so
+    the response bytes equal the bytes for an unseeded route."""
+    from aeroza.tiles.raster import transparent_tile_bytes
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("k1", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    # z=3 / x=6 / y=3 is east of -45° W — fully outside the CONUS grid
+    # we seeded. The render path returns alpha-zero across every
+    # pixel, the fast path catches it, and we get the canned
+    # transparent bytes.
+    response = await api_client.get("/v1/mrms/tiles/3/6/3.png")
+    assert response.status_code == 200
+    expected = transparent_tile_bytes(format="png")
+    assert response.content == expected
+
+
 async def test_png_and_webp_caches_are_disjoint_per_format(
     api_client: AsyncClient, integration_db: Database, tmp_path: Path
 ) -> None:

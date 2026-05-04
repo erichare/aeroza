@@ -382,6 +382,19 @@ export interface WebhookSubscriptionQuery {
   limit?: number;
 }
 
+/**
+ * Body for ``POST /v1/webhooks``. Only the URL and events are
+ * required; the description is optional human-readable text. The
+ * signing secret is generated server-side and returned exactly once
+ * in the response — keep it.
+ */
+export interface WebhookSubscriptionCreate {
+  url: string;
+  /** At least one event type — the server allowlists known types. */
+  events: string[];
+  description?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Alert rules (webhook predicate DSL)
 

@@ -100,6 +100,16 @@ def render_tile_image(
     Returns the encoded image bytes in the requested ``format``.
     Empty / out-of-domain tiles are returned as a fully transparent
     image so the client doesn't have to handle 404s on every miss.
+
+    First-render perf: when the sampled RGBA is fully transparent
+    (every alpha byte is zero — i.e. the tile sits entirely outside
+    the materialised grid's coverage, or every cell was below the
+    no-echo floor), we skip the PNG/WebP encode and return the
+    precomputed transparent-tile bytes. PIL's PNG encoder takes
+    20-50 ms on a 256x256 RGBA frame even when the input is solid
+    transparent, so the early-out compounds with the LRU + immutable
+    headers — the first request for every off-CONUS tile costs
+    almost nothing now, instead of a full encode.
     """
     bounds = tile_bounds(z, x, y)
     rgba = _render_rgba(
@@ -109,7 +119,24 @@ def render_tile_image(
         tile_size=tile_size,
         zoom=z,
     )
+    if _is_fully_transparent(rgba):
+        return transparent_tile_bytes(tile_size=tile_size, format=format)
     return _encode(rgba, format=format)
+
+
+def _is_fully_transparent(rgba: np.ndarray) -> bool:
+    """Return True when every pixel's alpha channel is zero.
+
+    The sampled tile is shaped ``(H, W, 4)`` with the alpha channel at
+    index 3. ``np.any`` short-circuits on the first non-zero alpha, so
+    the worst case (a non-empty tile) costs O(first-non-empty-pixel)
+    rather than O(H*W). The empty-tile case is the one we're
+    optimising for — a single vectorised compare over 65k bytes,
+    well under a millisecond.
+    """
+    if rgba.ndim != 3 or rgba.shape[-1] != 4:
+        return False
+    return not bool(rgba[..., 3].any())
 
 
 def _render_rgba(
