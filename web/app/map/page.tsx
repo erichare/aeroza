@@ -143,6 +143,19 @@ export default function MapPage() {
     );
   }, [recentGrids, liveAt]);
 
+  // Newest known grid — used as the radar pin when the loop is paused
+  // or the user is viewing live. Pinning to a concrete fileKey instead
+  // of letting the AlertsMap fall through to its cache-busting "live"
+  // URL makes every tile request browser-cache + server-LRU eligible
+  // (pinned tiles are forever-immutable on the server). The pin
+  // updates whenever the /v1/mrms/grids poll lands a newer entry, so
+  // the radar still trends fresh — but without the per-minute URL
+  // mutation that previously defeated the HTTP cache.
+  const liveLatestFileKey = useMemo<string | null>(() => {
+    if (recentGrids.length === 0) return null;
+    return recentGrids[recentGrids.length - 1]?.fileKey ?? null;
+  }, [recentGrids]);
+
   // Drive the loop frame. We deliberately depend on ``loopGrids.length``
   // instead of the array identity so a new grid sliding into the
   // window doesn't reset the cursor — the modulo lets it advance
@@ -325,7 +338,12 @@ export default function MapPage() {
       <div className="relative flex-1">
         <AlertsMap
           displayedAt={loopActive ? effectiveDisplayedAt : isLive ? null : displayedAt}
-          radarFileKey={loopGrid?.fileKey ?? null}
+          // Loop frame wins (replay); else pin to latest known grid so
+          // live-mode tiles are immutable & cacheable. Falls through to
+          // ``null`` only on cold load before the first /v1/mrms/grids
+          // response — the AlertsMap's own cache-busting fallback handles
+          // that brief window.
+          radarFileKey={loopGrid?.fileKey ?? liveLatestFileKey ?? null}
           prefetchNextFileKey={nextLoopGrid?.fileKey ?? null}
           showRadar={showRadar}
           onLoaded={handleLoaded}

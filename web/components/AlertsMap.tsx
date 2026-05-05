@@ -231,10 +231,19 @@ export function AlertsMap({
       // to fetch fresher tiles without recreating the source. When
       // `radarFileKey` is set, we pin to a specific historical grid via
       // the `fileKey` query param and the refresh tick becomes a no-op.
+      //
+      // ``maxzoom`` mirrors ``aeroza.query.v1.mrms._TILE_MAX_ZOOM`` —
+      // requesting deeper than that 422s on the API. Telling MapLibre
+      // the source pyramid only goes to z=10 makes it overzoom z=10
+      // tiles cleanly past that point instead of hammering the server
+      // with rejected requests and falling back to the failed-fetch
+      // upscaler (which was the visible "blurry mush" on deep zoom).
       map.addSource(RADAR_SOURCE_ID, {
         type: "raster",
         tiles: [buildRadarTileUrl(radarFileKey)],
         tileSize: 256,
+        minzoom: 0,
+        maxzoom: 10,
         attribution: "MRMS · NOAA / NSSL",
       });
       map.addLayer(
