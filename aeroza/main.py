@@ -132,6 +132,18 @@ def create_app() -> FastAPI:
             # to a deployed dashboard talking back to the API.
             allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["*"],
+            # Browsers strip non-CORS-safelisted response headers from
+            # cross-origin reads unless the server lists them here. The
+            # tile route's ``X-Aeroza-*`` family is what the radar loop
+            # uses to verify cache state and grid pinning from the
+            # browser devtools — without this, ``hit`` / ``miss`` is
+            # invisible from the deployed UI even though the server is
+            # setting it correctly.
+            expose_headers=[
+                "X-Aeroza-Tile-Cache",
+                "X-Aeroza-Grid-Key",
+                "X-Aeroza-Grid-Valid-At",
+            ],
         )
 
     @app.get("/health", tags=["meta"])
