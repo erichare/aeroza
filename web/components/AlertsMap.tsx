@@ -27,6 +27,27 @@ const OUTLINE_LAYER_ID = "alerts-outline";
 
 const RADAR_SOURCE_ID = "mrms-radar";
 const RADAR_LAYER_ID = "mrms-radar";
+// Per-frame source/layer IDs in multi-source mode (see ``radarFrames``
+// prop). The fileKey is interpolated verbatim — MapLibre treats source
+// IDs as opaque strings so the embedded slashes/dots in MRMS keys are
+// fine. Both a source and a layer share the same suffix so cleanup +
+// visibility toggling can derive one from the other.
+const RADAR_FRAME_SOURCE_PREFIX = "mrms-radar-frame:";
+const RADAR_FRAME_LAYER_PREFIX = "mrms-radar-frame-layer:";
+// Cross-fade between frames in multi-source mode. Short enough that
+// the fade completes within one frame interval at 4× loop speed
+// (200 ms) — anything longer would have the previous frame still
+// fading out as the next one tried to fade in, which reads as ghosting.
+const RADAR_FRAME_FADE_MS = 180;
+
+function frameSourceId(fileKey: string): string {
+  return RADAR_FRAME_SOURCE_PREFIX + fileKey;
+}
+
+function frameLayerId(fileKey: string): string {
+  return RADAR_FRAME_LAYER_PREFIX + fileKey;
+}
+
 // Insert radar layer just below the alert polygons so alerts stay on top
 // (severity polygons are the primary signal; radar is the backdrop).
 
@@ -143,6 +164,35 @@ interface AlertsMapProps {
    */
   onRadarLoadingChange?: (loading: boolean) => void;
   /**
+   * Pre-stage these grids as separate MapLibre raster sources so the
+   * loop's frame swap is a visibility toggle instead of a
+   * ``setTiles()`` call. Why it matters:
+   *
+   * MapLibre's ``setTiles()`` calls ``SourceCache.reload()``, which
+   * does ``this._cache.reset()`` — every URL swap **clears the
+   * source's tile cache**. Even when the browser HTTP cache holds
+   * the bytes (immutable, max-age=1y), MapLibre still has to re-fetch,
+   * re-decode, and re-upload to the GPU on every loop iteration. The
+   * visible symptom: iter 1 looks sharp (tiles arrive cleanly), iter
+   * 2+ goes blurry as the cache-reset chain forces re-decode mid-
+   * camera-movement on every frame.
+   *
+   * One source per fileKey sidesteps the reset entirely. Each
+   * source's tiles cache forever; toggling visibility between layers
+   * is instant. After one full loop, every subsequent iteration is
+   * essentially free.
+   *
+   * Pass the auto-loop's full grid set here. Omit (or pass empty) to
+   * stay on the legacy single-source code path — that path is fine
+   * for static views like the home hero and the /demo replay scrubber
+   * where the URL changes rarely.
+   *
+   * ``| undefined`` is explicit so the loop's
+   * ``loopActive ? loopGrids : undefined`` ternary type-checks under
+   * ``exactOptionalPropertyTypes: true``.
+   */
+  radarFrames?: ReadonlyArray<{ fileKey: string }> | undefined;
+  /**
    * Caller-supplied alert collection. When set, the map renders these
    * features instead of polling ``/v1/alerts``. Used by /demo to show
    * the historical NWS warnings that were in force during a featured
@@ -189,6 +239,7 @@ export function AlertsMap({
   externalAlerts = null,
   onLoaded,
   onRadarLoadingChange,
+  radarFrames,
 }: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -198,6 +249,13 @@ export function AlertsMap({
   // Cache the most recent fetch so re-filtering on `displayedAt` change
   // doesn't trigger a network round trip.
   const lastCollectionRef = useRef<AlertFeatureCollection | null>(null);
+  // Track which fileKeys we've staged as per-frame radar sources +
+  // layers. Reconciled against the ``radarFrames`` prop so we add new
+  // ones as the loop window slides forward and tear down ones that
+  // dropped out. Reset when the underlying map is destroyed (cleanup
+  // below) so a remount doesn't think the prior map's sources still
+  // exist on the new one.
+  const frameSourceKeysRef = useRef<Set<string>>(new Set());
 
   // Build the map exactly once. Strict mode's mount→cleanup→remount within
   // the same tick wrecks MapLibre's WebGL context, so we defer the actual
@@ -425,6 +483,17 @@ export function AlertsMap({
       if (createdMap && mapRef.current === createdMap) {
         createdMap.remove();
         mapRef.current = null;
+        // Per-frame sources lived on the map we just destroyed; the
+        // reconciliation effect tracks them in this Set to avoid
+        // double-adding. Resetting here keeps that bookkeeping
+        // honest if the component remounts onto a fresh map. The
+        // ``react-hooks/exhaustive-deps`` warning about the ref
+        // value possibly changing doesn't apply — the Set itself is
+        // stable across renders, and we *do* want to mutate the
+        // current instance, not whatever was captured at effect
+        // start.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        frameSourceKeysRef.current.clear();
       }
     };
     // `radarFileKey` and `showRadar` are read here only to seed the
@@ -533,7 +602,13 @@ export function AlertsMap({
     };
 
     const handleDataLoading = (event: { sourceId?: string }) => {
-      if (event.sourceId !== RADAR_SOURCE_ID) return;
+      // Match either the legacy single source or any per-frame source
+      // (multi-source mode prefixes the fileKey onto the source ID).
+      const id = event.sourceId;
+      if (id === undefined) return;
+      if (id !== RADAR_SOURCE_ID && !id.startsWith(RADAR_FRAME_SOURCE_PREFIX)) {
+        return;
+      }
       setLoading(true);
     };
     const handleIdle = () => setLoading(false);
@@ -546,7 +621,7 @@ export function AlertsMap({
     };
   }, [ready, onRadarLoadingChange]);
 
-  // Radar tile URL management.
+  // Radar tile URL management — legacy single-source path.
   //
   // - "Live" mode (radarFileKey === null): periodically swap the tile URL
   //   with a fresh cache-buster so MapLibre re-fetches and the user sees
@@ -555,8 +630,13 @@ export function AlertsMap({
   //   prop changes. Used by /demo's autoplay scrubber to step the radar
   //   through historical grids one fileKey at a time. No interval timer
   //   in this mode — a refresh would just re-fetch the same image.
+  //
+  // Skipped entirely when ``radarFrames`` puts the component in
+  // multi-source mode — the frames-mode effects below own URL
+  // management for that path.
   useEffect(() => {
     if (!ready || !showRadar) return;
+    if ((radarFrames?.length ?? 0) > 0) return;
     const swap = () => {
       const map = mapRef.current;
       if (!map) return;
@@ -578,7 +658,102 @@ export function AlertsMap({
     }
     const id = setInterval(swap, RADAR_REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [ready, showRadar, radarFileKey]);
+  }, [ready, showRadar, radarFileKey, radarFrames]);
+
+  // Multi-source mode: reconcile per-frame radar sources/layers with
+  // the ``radarFrames`` prop. Each fileKey gets its own MapLibre
+  // raster source so MapLibre's per-source tile cache survives across
+  // loop iterations — the architectural fix for the "iter 1 sharp,
+  // iter 2 blurry" symptom (see prop docstring).
+  //
+  // Sources stay invisible (``visibility: none``) until the active
+  // frame matches; the visibility-toggle effect below picks the
+  // currently-active one. ``visibility: none`` also tells MapLibre
+  // *not* to fetch tiles for invisible sources, so adding 19 sources
+  // up front doesn't fan out into 19× the initial bandwidth — each
+  // source only fetches when the loop reaches its frame.
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    const map = mapRef.current;
+    const beforeLabels = firstSymbolLayerId(map);
+    const desired = new Set((radarFrames ?? []).map((f) => f.fileKey));
+    const existing = frameSourceKeysRef.current;
+
+    for (const fileKey of desired) {
+      if (existing.has(fileKey)) continue;
+      const sourceId = frameSourceId(fileKey);
+      const layerId = frameLayerId(fileKey);
+      // Defensive: the underlying map may have already had the source
+      // added by a stale ref state — getSource is the authoritative check.
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: "raster",
+          tiles: [buildRadarTileUrl(fileKey)],
+          tileSize: 256,
+          minzoom: 0,
+          maxzoom: 10,
+          attribution: "MRMS · NOAA / NSSL",
+        });
+      }
+      if (!map.getLayer(layerId)) {
+        map.addLayer(
+          {
+            id: layerId,
+            type: "raster",
+            source: sourceId,
+            layout: { visibility: "none" },
+            paint: {
+              "raster-opacity": 0.78,
+              "raster-resampling": "linear",
+              "raster-fade-duration": RADAR_FRAME_FADE_MS,
+            },
+          },
+          beforeLabels,
+        );
+      }
+      existing.add(fileKey);
+    }
+
+    // Tear down sources for fileKeys that dropped out of the loop
+    // window (e.g. the rolling 1h cutoff slid past them). Without
+    // cleanup, a long-running tab would accumulate sources forever.
+    for (const fileKey of [...existing]) {
+      if (desired.has(fileKey)) continue;
+      const sourceId = frameSourceId(fileKey);
+      const layerId = frameLayerId(fileKey);
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      existing.delete(fileKey);
+    }
+  }, [ready, radarFrames]);
+
+  // Frame visibility — toggles which radar layer is on screen. In
+  // multi-source mode the matching frame layer goes ``visible`` and
+  // every other frame layer (plus the legacy single source) goes
+  // ``none``. In legacy mode the legacy single source's visibility
+  // tracks ``showRadar`` (handled by the dedicated effect above);
+  // here we leave it alone.
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    const map = mapRef.current;
+    const framesActive = (radarFrames?.length ?? 0) > 0;
+
+    for (const fileKey of frameSourceKeysRef.current) {
+      const layerId = frameLayerId(fileKey);
+      if (!map.getLayer(layerId)) continue;
+      const visible = framesActive && showRadar && fileKey === radarFileKey;
+      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+    }
+
+    // In multi-source mode, the legacy single layer must stay hidden
+    // — otherwise it'd paint a stale frame underneath the active
+    // multi-source layer. The dedicated legacy-visibility effect
+    // above handles the inverse case (frames mode off → legacy
+    // tracks showRadar).
+    if (framesActive && map.getLayer(RADAR_LAYER_ID)) {
+      map.setLayoutProperty(RADAR_LAYER_ID, "visibility", "none");
+    }
+  }, [ready, radarFileKey, showRadar, radarFrames]);
 
   // Prefetch the next loop frame's tiles into the browser cache so the
   // swap to that frame doesn't trigger a network round-trip. Pinned
@@ -588,8 +763,14 @@ export function AlertsMap({
   // on ``prefetchNextFileKey`` rather than inside the swap loop —
   // separating "show this frame" from "warm the next" keeps either
   // path debuggable in isolation.
+  //
+  // Skipped in multi-source mode — each frame has its own MapLibre
+  // source whose tile cache survives across the loop, so a manual
+  // ``new Image()`` warm-up is redundant (and would just compete with
+  // MapLibre's own fetch on first encounter).
   useEffect(() => {
     if (!ready || !showRadar) return;
+    if ((radarFrames?.length ?? 0) > 0) return;
     if (!prefetchNextFileKey) return;
     if (prefetchNextFileKey === radarFileKey) return; // already on screen
     const map = mapRef.current;
@@ -616,7 +797,7 @@ export function AlertsMap({
       // the user pauses. Browser cache keeps already-fetched tiles.
       for (const img of requested) img.src = "";
     };
-  }, [ready, showRadar, prefetchNextFileKey, radarFileKey]);
+  }, [ready, showRadar, prefetchNextFileKey, radarFileKey, radarFrames]);
 
   function applyToSource(
     collection: AlertFeatureCollection,

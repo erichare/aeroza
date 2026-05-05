@@ -366,6 +366,12 @@ export default function MapPage() {
           // that brief window.
           radarFileKey={loopGrid?.fileKey ?? liveLatestFileKey ?? null}
           prefetchNextFileKey={nextLoopGrid?.fileKey ?? null}
+          // Multi-source mode for the loop: pre-stage every frame as a
+          // separate MapLibre source so iter 2+ is instant (no
+          // ``setTiles`` cache-reset on each swap). Only engage when
+          // the loop is actually active — live-mode (single fileKey)
+          // gets fine results from the legacy single-source path.
+          radarFrames={loopActive ? loopGrids : undefined}
           showRadar={showRadar}
           onLoaded={handleLoaded}
           onRadarLoadingChange={handleRadarLoadingChange}
