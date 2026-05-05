@@ -135,17 +135,13 @@ async def test_prewarm_skips_already_cached_entries(tmp_path: Path) -> None:
     uri = _write_conus_grid(tmp_path / "g.zarr")
     cache = TilePngCache(max_bytes=8 * 1024 * 1024)
 
-    first = await prewarm_tiles_for_grid(
-        _locator(uri), cache=cache, zooms=(4,), formats=("png",)
-    )
+    first = await prewarm_tiles_for_grid(_locator(uri), cache=cache, zooms=(4,), formats=("png",))
     assert first.rendered > 0
     assert first.skipped_cached == 0
 
     # Re-prewarming the same grid (e.g. NATS at-least-once redelivery)
     # must be a no-op — every entry should be skipped, not re-rendered.
-    second = await prewarm_tiles_for_grid(
-        _locator(uri), cache=cache, zooms=(4,), formats=("png",)
-    )
+    second = await prewarm_tiles_for_grid(_locator(uri), cache=cache, zooms=(4,), formats=("png",))
     assert second.rendered == 0
     assert second.failed == 0
     assert second.skipped_cached == first.rendered
@@ -166,9 +162,7 @@ async def test_prewarm_continues_on_per_tile_render_error(tmp_path: Path) -> Non
         nbytes=0,
     )
 
-    stats = await prewarm_tiles_for_grid(
-        bogus, cache=cache, zooms=(4,), formats=("png",)
-    )
+    stats = await prewarm_tiles_for_grid(bogus, cache=cache, zooms=(4,), formats=("png",))
     assert stats.rendered == 0
     assert stats.failed == len(conus_tile_coords(4))
 
