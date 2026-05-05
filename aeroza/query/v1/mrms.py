@@ -87,22 +87,33 @@ _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 def _negotiate_tile_format(accept: str | None) -> TileFormat:
     """Pick PNG or WebP based on the request's Accept header.
 
-    Two-format content negotiation kept deliberately tiny:
+    WebP is the default because:
 
-    * If the client explicitly accepts ``image/webp``, return webp —
-      the bytes are ~30-40% smaller than the equivalent lossless
-      PNG and Pillow encodes them ~2x faster (cold-render win).
-    * Otherwise return PNG. The URL still ends in ``.png`` either
-      way; the response's ``Content-Type`` plus a ``Vary: Accept``
-      header is what the cache and the client read.
+    * Bytes are ~30% smaller than lossless PNG for the discrete dBZ
+      colour ramp, and the radar loop pulls ~28 tiles per frame
+      swap — that's ~700 KB saved per frame on a typical viewport.
+    * Pillow encodes lossless WebP ~2x faster than PNG.
+    * Browser support is essentially universal (>97%).
 
-    No q-value parsing: in practice every browser ships
-    ``image/webp`` ahead of ``image/png`` if it supports both, so
-    the substring check is reliable.
+    PNG is only returned when the client *explicitly* prefers it and
+    rejects WebP — the standard signal is ``Accept: image/png``
+    without ``image/webp``. Common cases that hit this path:
+
+    * ``curl`` smoke tests that happen to send ``Accept: image/png``.
+    * Internal tools / older non-browser clients.
+
+    A request with ``Accept: */*`` (the default for browser
+    ``fetch()`` and MapLibre's raster source) lands on WebP — that's
+    the change that unblocks the deployed radar UI from PNG-only.
     """
     if accept is None:
+        return "webp"
+    lowered = accept.lower()
+    explicitly_png = "image/png" in lowered
+    accepts_webp = "image/webp" in lowered or "*/*" in lowered or "image/*" in lowered
+    if explicitly_png and not accepts_webp:
         return "png"
-    return "webp" if "image/webp" in accept.lower() else "png"
+    return "webp"
 
 
 @router.get(

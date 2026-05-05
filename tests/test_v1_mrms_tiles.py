@@ -116,8 +116,14 @@ async def test_tile_over_grid_has_visible_pixels(
     await _seed(integration_db, (file,), (_locator(file.key, uri),))
 
     # z=3 / x=2 / y=3 covers (-90, -45) lng × (40.98, 0) lat — overlaps
-    # the centre of our (-110..-80, 25..50) grid.
-    response = await api_client.get("/v1/mrms/tiles/3/2/3.png")
+    # the centre of our (-110..-80, 25..50) grid. Explicit
+    # ``Accept: image/png`` keeps this assertion stable now that
+    # ``Accept: */*`` (httpx default) negotiates to WebP — the PNG
+    # path needs an opt-in signal.
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png",
+        headers={"Accept": "image/png"},
+    )
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-aeroza-grid-key"] == "k1"
@@ -146,7 +152,10 @@ async def test_tile_outside_grid_is_transparent(
 async def test_no_grid_falls_back_to_transparent(api_client: AsyncClient) -> None:
     # No catalog rows seeded; route should return a transparent tile, not
     # a 404, so MapLibre doesn't aggressively retry.
-    response = await api_client.get("/v1/mrms/tiles/3/2/3.png")
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png",
+        headers={"Accept": "image/png"},
+    )
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert "x-aeroza-grid-key" not in response.headers
@@ -324,8 +333,13 @@ async def test_off_grid_tile_short_circuits_to_transparent_bytes(
     # z=3 / x=6 / y=3 is east of -45° W — fully outside the CONUS grid
     # we seeded. The render path returns alpha-zero across every
     # pixel, the fast path catches it, and we get the canned
-    # transparent bytes.
-    response = await api_client.get("/v1/mrms/tiles/3/6/3.png")
+    # transparent bytes. Explicit ``Accept: image/png`` matches the
+    # ``format="png"`` we compare against (default negotiation now
+    # picks WebP, which would produce different bytes).
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/6/3.png",
+        headers={"Accept": "image/png"},
+    )
     assert response.status_code == 200
     expected = transparent_tile_bytes(format="png")
     assert response.content == expected
