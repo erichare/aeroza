@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type AlertFeatureCollection,
@@ -156,15 +156,36 @@ export default function MapPage() {
     return recentGrids[recentGrids.length - 1]?.fileKey ?? null;
   }, [recentGrids]);
 
+  // Track whether the radar layer is mid-fetch so the loop driver can
+  // skip a frame tick when the previous frame's tiles are still in
+  // flight. Stored in a ref so updating it doesn't re-render the
+  // page and tear down the interval — the interval reads the latest
+  // value on each tick.
+  const radarLoadingRef = useRef(false);
+  const handleRadarLoadingChange = useCallback((loading: boolean) => {
+    radarLoadingRef.current = loading;
+  }, []);
+
   // Drive the loop frame. We deliberately depend on ``loopGrids.length``
   // instead of the array identity so a new grid sliding into the
   // window doesn't reset the cursor — the modulo lets it advance
   // through the new total cleanly.
+  //
+  // The interval ticks at the configured speed, but a tick that
+  // lands while the radar is still loading the previous frame is
+  // *skipped* — the next tick re-evaluates. This keeps the loop
+  // honest under burst load: when the API is slow (or the user is
+  // on a flaky network), the perceived speed adapts down rather
+  // than piling more frame swaps on top of an already-overwhelmed
+  // pipeline. The loop never falls *behind* — it just drops frames
+  // that would have been visually identical (still showing the
+  // partially-loaded previous frame).
   useEffect(() => {
     if (!loopPlaying) return;
     if (loopGrids.length < 2) return;
     const ms = LOOP_FRAME_DURATION_MS[loopSpeed];
     const id = setInterval(() => {
+      if (radarLoadingRef.current) return;
       setLoopFrame((f) => (loopGrids.length === 0 ? 0 : (f + 1) % loopGrids.length));
     }, ms);
     return () => clearInterval(id);
@@ -347,6 +368,7 @@ export default function MapPage() {
           prefetchNextFileKey={nextLoopGrid?.fileKey ?? null}
           showRadar={showRadar}
           onLoaded={handleLoaded}
+          onRadarLoadingChange={handleRadarLoadingChange}
         />
       </div>
 

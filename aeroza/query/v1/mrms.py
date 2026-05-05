@@ -61,6 +61,7 @@ from aeroza.tiles.raster import (
     render_tile_image,
     transparent_tile_bytes,
 )
+from aeroza.tiles.render_pool import get_render_semaphore
 
 router = APIRouter(tags=["mrms"])
 
@@ -311,43 +312,47 @@ async def get_mrms_tile_route(
             detail=f"tile coords out of range for zoom {z} (max x/y = {n - 1})",
         )
 
-    # Server-side LRU keyed by (file_key, z, x, y, format). Only
-    # pinned-mode tiles are eligible — live-mode tiles' "latest grid"
-    # target moves with new ingests and would race the materialiser.
-    # Including ``format`` in the key keeps PNG and WebP responses
-    # in distinct slots so a request for ``image/webp`` doesn't
-    # accidentally serve PNG bytes.
+    # Server-side LRU keyed by (file_key, z, x, y, format). The route
+    # has already resolved the request to a concrete ``grid.file_key``
+    # — whether the caller asked for ``?fileKey=…`` (pinned) or relied
+    # on the "latest" fallback — so the cache key is identical in both
+    # cases. Live-mode used to be excluded out of fear that "latest"
+    # could race the materialiser; in practice every cached entry is
+    # keyed on a specific file_key, and the entry is correct for that
+    # file_key forever. The Cache-Control header on the response is
+    # what differs (immutable vs short max-age) — the cache itself is
+    # safe to populate either way.
     cache = get_default_cache()
-    cache_key = (
-        CacheKey(file_key=grid.file_key, z=z, x=x, y=y, format=tile_format)
-        if file_key is not None
-        else None
-    )
-    cached_bytes: bytes | None = cache.get(cache_key) if cache_key is not None else None
+    cache_key = CacheKey(file_key=grid.file_key, z=z, x=x, y=y, format=tile_format)
+    cached_bytes: bytes | None = cache.get(cache_key)
 
     if cached_bytes is not None:
         body = cached_bytes
         cache_status = "hit"
     else:
+        # Cap concurrent renders. Without this back-pressure a radar-
+        # loop pan storm fans out into uncapped worker threads and the
+        # API self-503s under its own load. The semaphore only guards
+        # the cold-render path — cache hits above skip it entirely.
         try:
-            body = await asyncio.to_thread(
-                render_tile_image,
-                zarr_uri=grid.zarr_uri,
-                variable=grid.variable,
-                z=z,
-                x=x,
-                y=y,
-                format=tile_format,
-            )
+            async with get_render_semaphore():
+                body = await asyncio.to_thread(
+                    render_tile_image,
+                    zarr_uri=grid.zarr_uri,
+                    variable=grid.variable,
+                    z=z,
+                    x=x,
+                    y=y,
+                    format=tile_format,
+                )
         except KeyError as exc:
             # Variable not in Zarr → grid in catalog is broken; surface as 502.
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"grid storage missing variable: {exc}",
             ) from exc
-        if cache_key is not None:
-            cache.put(cache_key, body)
-        cache_status = "miss" if cache_key is not None else "bypass"
+        cache.put(cache_key, body)
+        cache_status = "miss"
 
     cache_control = (
         _TILE_CACHE_HEADER_PINNED
