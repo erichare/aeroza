@@ -42,9 +42,10 @@ COPY pyproject.toml uv.lock* LICENSE README.md ./
 # Resolve the full production dep set: db (alembic + asyncpg +
 # sqlalchemy + geoalchemy2), cache (redis), stream (nats-py), ingest
 # (boto3, xarray, zarr, numpy, pillow), grib (cfgrib — radar replay),
-# verify (pandas — calibration scoring). `--no-dev` keeps test/lint
-# tools out of the image.
-ARG EXTRAS="--extra db --extra cache --extra stream --extra ingest --extra grib --extra verify"
+# nowcast (pysteps + opencv + scipy + scikit-image — forecast
+# generation), verify (pandas — calibration scoring). `--no-dev` keeps
+# test/lint tools out of the image.
+ARG EXTRAS="--extra db --extra cache --extra stream --extra ingest --extra grib --extra nowcast --extra verify"
 RUN uv sync --frozen --no-install-project --no-dev ${EXTRAS} \
     || uv sync --no-install-project --no-dev ${EXTRAS}
 

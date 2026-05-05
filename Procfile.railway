@@ -5,12 +5,19 @@
 #   alerts       NWS alerts poller — feeds the alert polygons / SSE stream
 #   mrms         MRMS file-catalog poller — pulls grib2 manifests from NOAA S3
 #   materialise  GRIB → Zarr writer — what makes the radar tiles render
-#   webhooks    outbound webhook dispatcher
+#   nowcast      pysteps persistence forecaster — issues forecasts on every grid
+#   verify       scores already-issued forecasts against just-arrived obs;
+#                this is what populates the public calibration / "moat" panel
+#   webhooks     outbound webhook dispatcher
 #
-# METAR + nowcasters are intentionally absent from the demo deploy —
-# they're optional and add real RAM cost. Add lines here if you want
-# them on. The dispatcher is included because alert-rule webhooks
-# silently drop without it, which would surprise anyone testing rules.
+# nowcast + verify communicate over NATS (`aeroza.mrms.grids.new` and
+# `aeroza.nowcast.issued`), so this deploy needs ``NATS_URL`` pointed
+# at a reachable NATS service — without it both workers will restart-loop.
+#
+# METAR is still intentionally absent from the demo deploy — it adds
+# real RAM cost and isn't required for the radar/forecast/verify flow.
+# The dispatcher is included because alert-rule webhooks silently drop
+# without it, which would surprise anyone testing rules.
 #
 # `${PORT}` is set by Railway. Falling back to 8000 keeps the file
 # usable for ad-hoc `honcho start` runs outside Railway too.
@@ -19,4 +26,6 @@ api:        uvicorn aeroza.main:app --host 0.0.0.0 --port ${PORT:-8000}
 alerts:     aeroza-ingest-alerts
 mrms:       aeroza-ingest-mrms
 materialise: aeroza-materialise-mrms --target-root ${AEROZA_DATA_DIR:-/app/data}/mrms
+nowcast:    aeroza-nowcast-mrms --algorithm persistence
+verify:     aeroza-verify-nowcasts
 webhooks:   aeroza-dispatch-webhooks
