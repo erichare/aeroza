@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from typing import Final
 
 import structlog
@@ -16,7 +17,13 @@ from aeroza.auth.routes import router as auth_router
 from aeroza.config import Settings, get_settings
 from aeroza.query.v1 import router as v1_router
 from aeroza.shared.db import create_engine_and_session
-from aeroza.stream.nats import NatsAlertSubscriber, nats_connection
+from aeroza.stream.nats import (
+    NatsAlertSubscriber,
+    NatsMrmsGridSubscriber,
+    nats_connection,
+)
+from aeroza.tiles.cache import get_default_cache
+from aeroza.tiles.prewarm import run_prewarm_consumer
 from aeroza.webhooks.routes import router as webhooks_router
 from aeroza.webhooks.rule_routes import router as alert_rules_router
 
@@ -46,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       API still serves DB-backed routes; the streaming endpoint surfaces
       503. Tests bypass this hook entirely (httpx ASGITransport doesn't run
       lifespan) and set both attributes on ``app.state`` themselves.
+    - When NATS is reachable, also spin up a background consumer that
+      prewarms the tile LRU on every newly-materialised MRMS grid. Same
+      best-effort posture: if the connection drops mid-run we log and
+      let the consumer task wind down — tile rendering still works,
+      just cold-on-first-hit. The task is cancelled on shutdown.
     """
     settings: Settings = get_settings()
     async with AsyncExitStack() as stack:
@@ -54,9 +66,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.db = db
 
         subscriber: NatsAlertSubscriber | None
+        prewarm_task: asyncio.Task[None] | None = None
         try:
             nats_client = await stack.enter_async_context(nats_connection(settings.nats_url))
             subscriber = NatsAlertSubscriber(nats_client)
+            grid_subscriber = NatsMrmsGridSubscriber(nats_client)
+            prewarm_task = asyncio.create_task(
+                run_prewarm_consumer(
+                    subscriber=grid_subscriber,
+                    cache=get_default_cache(),
+                ),
+                name="tiles.prewarm.consumer",
+            )
         except Exception as exc:
             log.warning(
                 "startup.nats_unavailable",
@@ -71,9 +92,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             env=settings.env,
             version=__version__,
             streaming=subscriber is not None,
+            prewarm=prewarm_task is not None,
         )
-        yield
-        log.info("shutdown")
+        try:
+            yield
+        finally:
+            if prewarm_task is not None:
+                prewarm_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await prewarm_task
+            log.info("shutdown")
 
 
 def create_app() -> FastAPI:

@@ -1,12 +1,14 @@
-"""Bounded in-process LRU cache for rendered tile PNGs.
+"""Bounded in-process LRU cache for rendered tile bytes.
 
-Per-grid, per-(z, x, y), keyed by ``file_key``. A pinned tile (one with
-``?fileKey=…``) is forever-immutable — the source grid never changes
-once materialised — so caching the rendered bytes by key avoids
-re-opening the Zarr, re-sampling, and re-encoding PNG on every
-hit. Live-mode (latest-grid) tiles are *not* cached here: the latest
-grid moves with new ingests, so the cache key would race the
-materialiser and serve stale frames.
+Per-grid, per-(z, x, y), keyed by ``file_key`` (and the encoded
+``format``). A cached entry is immutable for its key: the source grid
+identified by ``file_key`` never changes once materialised, so the
+rendered bytes for ``(file_key, z, x, y, format)`` are correct
+forever. Both pinned (``?fileKey=…``) and live-mode (latest-grid)
+requests hit the same cache — the route resolves "latest" to a
+concrete ``file_key`` *before* the cache lookup, so live tiles
+participate too. Only the response's ``Cache-Control`` header
+differs (immutable for explicit pin, short max-age for live).
 
 Sizing: bounded by total bytes, not entry count. A typical CONUS
 tile at z=5 is ~6 KB; 200 MB holds ~30k tiles, comfortably more
@@ -50,10 +52,11 @@ class CacheKey:
     ``file_key`` pins the source grid; ``z, x, y`` pin the tile coords;
     ``format`` keeps PNG and WebP responses in distinct cache slots
     so a request for ``image/webp`` doesn't accidentally serve PNG
-    bytes (or vice versa). A live-mode tile (no ``file_key``)
-    deliberately can't be expressed as a CacheKey — the cache module
-    *only* speaks about pinned tiles, so the type system pushes that
-    invariant up to the caller.
+    bytes (or vice versa). The cache key is always a concrete
+    ``file_key`` — for live-mode (no ``?fileKey=`` query param) the
+    route resolves "latest" to a specific grid before constructing
+    the key, so the cache never holds an entry under an ambiguous
+    "latest" placeholder.
 
     ``format`` defaults to ``"png"`` so existing callers and tests
     that constructed ``CacheKey(file_key=..., z=..., x=..., y=...)``

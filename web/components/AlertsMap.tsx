@@ -133,6 +133,16 @@ interface AlertsMapProps {
    */
   hideLegend?: boolean;
   /**
+   * Optional callback firing whenever the radar layer's tile-load state
+   * flips. ``true`` means MapLibre is mid-fetch on at least one radar
+   * tile (i.e. the layer is incomplete on screen); ``false`` means the
+   * map is idle. Used by the auto-loop on /map to skip a frame tick
+   * when the previous frame's tiles haven't finished loading — paces
+   * the loop against actual server throughput rather than a fixed
+   * interval that overruns under burst load.
+   */
+  onRadarLoadingChange?: (loading: boolean) => void;
+  /**
    * Caller-supplied alert collection. When set, the map renders these
    * features instead of polling ``/v1/alerts``. Used by /demo to show
    * the historical NWS warnings that were in force during a featured
@@ -178,6 +188,7 @@ export function AlertsMap({
   hideLegend = false,
   externalAlerts = null,
   onLoaded,
+  onRadarLoadingChange,
 }: AlertsMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -494,6 +505,46 @@ export function AlertsMap({
       showRadar ? "visible" : "none",
     );
   }, [ready, showRadar]);
+
+  // Surface the radar source's tile-load state to the parent. The /map
+  // auto-loop uses it to skip a frame when the previous frame's tiles
+  // are still in flight — pacing the loop against actual server
+  // throughput rather than a fixed interval. We track loading via two
+  // events:
+  //
+  //   - ``dataloading`` on the radar source: at least one tile is
+  //     mid-fetch → loading = true
+  //   - ``idle`` on the map: nothing left to load → loading = false
+  //
+  // The pair are sticky from the parent's perspective: dataloading
+  // can fire multiple times before the matching idle, but
+  // ``onRadarLoadingChange`` is only invoked when the boolean
+  // actually flips, so the parent isn't spammed.
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    if (!onRadarLoadingChange) return;
+    const map = mapRef.current;
+    let loading = false;
+
+    const setLoading = (next: boolean) => {
+      if (loading === next) return;
+      loading = next;
+      onRadarLoadingChange(next);
+    };
+
+    const handleDataLoading = (event: { sourceId?: string }) => {
+      if (event.sourceId !== RADAR_SOURCE_ID) return;
+      setLoading(true);
+    };
+    const handleIdle = () => setLoading(false);
+
+    map.on("dataloading", handleDataLoading);
+    map.on("idle", handleIdle);
+    return () => {
+      map.off("dataloading", handleDataLoading);
+      map.off("idle", handleIdle);
+    };
+  }, [ready, onRadarLoadingChange]);
 
   // Radar tile URL management.
   //

@@ -249,13 +249,15 @@ async def test_pinned_tile_emits_immutable_cache_header_and_caches_server_side(
     assert second.content == first.content
 
 
-async def test_live_tile_keeps_short_ttl_and_bypasses_lru(
+async def test_live_tile_keeps_short_ttl_but_is_lru_cached(
     api_client: AsyncClient, integration_db: Database, tmp_path: Path
 ) -> None:
-    """Live-mode tiles (no fileKey) still get the short TTL and are
-    deliberately not server-cached — the latest grid moves with new
-    ingests, so caching the rendered bytes by zoom/coords would race
-    the materialiser."""
+    """Live-mode tiles (no fileKey) keep the short TTL on the wire but
+    *are* served from the LRU on the second hit. The route resolves
+    "latest" to a concrete ``file_key`` before the cache lookup, so a
+    live request becomes the same cache identity as a pinned request
+    against the same grid — only the ``Cache-Control`` header differs
+    (short max-age for live, immutable for pinned)."""
     from aeroza.tiles.cache import TilePngCache, set_default_cache
 
     set_default_cache(TilePngCache(max_bytes=1024 * 1024))
@@ -264,11 +266,19 @@ async def test_live_tile_keeps_short_ttl_and_bypasses_lru(
     file = _file("k1", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
     await _seed(integration_db, (file,), (_locator(file.key, uri),))
 
-    response = await api_client.get("/v1/mrms/tiles/3/2/3.png")
-    assert response.status_code == 200
-    assert "max-age=60" in response.headers["cache-control"]
-    assert "immutable" not in response.headers["cache-control"]
-    assert response.headers["x-aeroza-tile-cache"] == "bypass"
+    first = await api_client.get("/v1/mrms/tiles/3/2/3.png")
+    assert first.status_code == 200
+    assert "max-age=60" in first.headers["cache-control"]
+    assert "immutable" not in first.headers["cache-control"]
+    assert first.headers["x-aeroza-tile-cache"] == "miss"
+
+    second = await api_client.get("/v1/mrms/tiles/3/2/3.png")
+    assert second.status_code == 200
+    assert "max-age=60" in second.headers["cache-control"]
+    assert second.headers["x-aeroza-tile-cache"] == "hit"
+    # Bytes are byte-identical because the cached entry is the same
+    # rendered tile; only the response framing differs across hits.
+    assert second.content == first.content
 
 
 async def test_accept_image_webp_returns_webp_with_vary_header(
