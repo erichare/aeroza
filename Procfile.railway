@@ -9,6 +9,11 @@
 #   verify       scores already-issued forecasts against just-arrived obs;
 #                this is what populates the public calibration / "moat" panel
 #   webhooks     outbound webhook dispatcher
+#   retention    disk + DB GC — drops MRMS observation/nowcast Zarrs (and
+#                their catalog rows) older than ``AEROZA_MRMS_RETENTION_HOURS``,
+#                plus expired NWS alerts older than ``AEROZA_ALERT_RETENTION_DAYS``.
+#                Without this the Railway volume fills up — every
+#                materialised frame is otherwise kept forever.
 #
 # nowcast + verify communicate over NATS (`aeroza.mrms.grids.new` and
 # `aeroza.nowcast.issued`), so this deploy needs ``NATS_URL`` pointed
@@ -29,3 +34,4 @@ materialise: aeroza-materialise-mrms --target-root ${AEROZA_DATA_DIR:-/app/data}
 nowcast:    aeroza-nowcast-mrms --algorithm persistence
 verify:     aeroza-verify-nowcasts
 webhooks:   aeroza-dispatch-webhooks
+retention:  aeroza-prune-mrms
