@@ -44,6 +44,23 @@ class Settings(BaseSettings):
     # ``AEROZA_CORS_ALLOW_ORIGINS="https://aeroza.vercel.app,https://aeroza.dev"``
     cors_allow_origins: str = ""
 
+    # Retention windows for the prune worker. ``mrms_retention_hours``
+    # drops observation Zarrs (and the nowcasts derived from them) whose
+    # source-file ``valid_at`` is older than the cutoff — this is what
+    # keeps the Railway volume from filling. Six hours leaves a comfortable
+    # margin over the 60-minute max forecast horizon the verifier needs.
+    # ``alert_retention_days`` drops expired ``nws_alerts`` rows; they're
+    # small but accumulate, so a 30-day default suits the historical-alerts
+    # endpoint without growing unbounded.
+    mrms_retention_hours: float = 6.0
+    alert_retention_days: int = 30
+    # Cadence + batch size for the prune worker. Default cadence is
+    # well below the MRMS arrival rate (~30 frames/hour), so the worker
+    # is never the bottleneck. Batching caps the per-tick transaction so
+    # a long-running prune (e.g. after a deploy gap) doesn't lock writes.
+    retention_interval_seconds: float = 600.0
+    retention_batch_size: int = 500
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
