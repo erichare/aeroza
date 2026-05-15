@@ -76,12 +76,30 @@ _TILE_MAX_ZOOM: int = 10
 # fresh while still letting CDNs/browsers coalesce zoom-pan storms.
 _TILE_CACHE_SECONDS_LIVE: int = 60
 
+# ``stale-while-revalidate`` window (RFC 5861) layered on top of the
+# live freshness window. While a tile is within this grace period after
+# its max-age expires, conforming caches MAY return the stale bytes
+# immediately and asynchronously revalidate against the origin. iOS 17+
+# URLCache and Cloudflare both honour this directive — together they
+# make pan/zoom feel instant during the gap between MRMS refreshes.
+_TILE_SWR_SECONDS_LIVE: int = 120
+
 # Pinned tiles (``?fileKey=…``) are forever-immutable: the bytes for
 # (file_key, z, x, y) are deterministic and the source grid never
 # changes once materialised. Emitting the immutable directive lets
 # browsers and CDNs cache aggressively across the radar replay loop —
 # the second loop iteration becomes a series of 304s / cache hits.
 _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
+
+# Live-mode tile header. The ``stale-while-revalidate`` window is what
+# unblocks the "radar vanishes mid-session" experience: when max-age
+# expires, conforming caches hand back the stale tile immediately and
+# refresh in the background, so users never see a blank gap during the
+# 60–180 s window after the previous MRMS frame ages out.
+_TILE_CACHE_HEADER_LIVE: str = (
+    f"public, max-age={_TILE_CACHE_SECONDS_LIVE}, "
+    f"stale-while-revalidate={_TILE_SWR_SECONDS_LIVE}"
+)
 
 
 def _negotiate_tile_format(accept: str | None) -> TileFormat:
@@ -308,7 +326,7 @@ async def get_mrms_tile_route(
             content=transparent_tile_bytes(format=tile_format),
             media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
             headers={
-                "Cache-Control": f"public, max-age={_TILE_CACHE_SECONDS_LIVE}",
+                "Cache-Control": _TILE_CACHE_HEADER_LIVE,
                 # Same body shape across both formats; declaring the
                 # negotiated dimension lets shared caches partition by
                 # Accept correctly when CDNs eventually sit in front.
@@ -368,7 +386,7 @@ async def get_mrms_tile_route(
     cache_control = (
         _TILE_CACHE_HEADER_PINNED
         if file_key is not None
-        else f"public, max-age={_TILE_CACHE_SECONDS_LIVE}"
+        else _TILE_CACHE_HEADER_LIVE
     )
     return Response(
         content=body,

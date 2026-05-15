@@ -159,6 +159,12 @@ async def test_no_grid_falls_back_to_transparent(api_client: AsyncClient) -> Non
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert "x-aeroza-grid-key" not in response.headers
+    # The transparent fallback uses the same live cache directive as a
+    # rendered live tile — short freshness + stale-while-revalidate
+    # window — so MapLibre / iOS URLCache stop hammering the route when
+    # a grid is briefly missing during materialisation.
+    assert "max-age=60" in response.headers["cache-control"]
+    assert "stale-while-revalidate=120" in response.headers["cache-control"]
     alpha = _decode_alpha(response.content)
     assert (alpha == 0).all()
 
@@ -278,12 +284,18 @@ async def test_live_tile_keeps_short_ttl_but_is_lru_cached(
     first = await api_client.get("/v1/mrms/tiles/3/2/3.png")
     assert first.status_code == 200
     assert "max-age=60" in first.headers["cache-control"]
+    # stale-while-revalidate lets conforming caches (iOS 17+ URLCache,
+    # Cloudflare) hand back the stale tile bytes while asynchronously
+    # refreshing — the radar never blanks during the 60–180s gap
+    # between MRMS frame refreshes.
+    assert "stale-while-revalidate=120" in first.headers["cache-control"]
     assert "immutable" not in first.headers["cache-control"]
     assert first.headers["x-aeroza-tile-cache"] == "miss"
 
     second = await api_client.get("/v1/mrms/tiles/3/2/3.png")
     assert second.status_code == 200
     assert "max-age=60" in second.headers["cache-control"]
+    assert "stale-while-revalidate=120" in second.headers["cache-control"]
     assert second.headers["x-aeroza-tile-cache"] == "hit"
     # Bytes are byte-identical because the cached entry is the same
     # rendered tile; only the response framing differs across hits.
