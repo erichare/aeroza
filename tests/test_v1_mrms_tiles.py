@@ -15,6 +15,7 @@ We seed a synthetic grid covering a known lat/lng box and assert:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -395,6 +396,172 @@ async def test_keyerror_still_502s_for_structural_grid_bug(
 
     response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=schema-bug")
     assert response.status_code == 502
+
+
+async def test_cold_render_writes_through_to_r2(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every cold render fires off a fire-and-forget R2 upload so the
+    static CDN origin self-heals as the radar UI exercises the
+    fallback. When the prewarm subscriber eventually catches up the
+    path is a no-op (R2 already has the bytes); until then it's the
+    *only* way tiles end up at ``tiles.aeroza.app`` if NATS event
+    delivery is broken.
+    """
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("write-through", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    uploads: list[dict[str, object]] = []
+
+    class _FakeR2:
+        async def put_tile(
+            self,
+            *,
+            file_key: str,
+            z: int,
+            x: int,
+            y: int,
+            fmt: str,
+            body: bytes,
+        ) -> None:
+            uploads.append(
+                {
+                    "file_key": file_key,
+                    "z": z,
+                    "x": x,
+                    "y": y,
+                    "fmt": fmt,
+                    "nbytes": len(body),
+                }
+            )
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.get_default_r2_client", lambda: _FakeR2())
+
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=write-through",
+        headers={"Accept": "image/webp"},
+    )
+    assert response.status_code == 200
+
+    # Fire-and-forget upload — drain the in-flight set so we can
+    # assert on the upload's outcome without racing it.
+    from aeroza.query.v1.mrms import _INFLIGHT_WRITE_THROUGHS
+
+    while _INFLIGHT_WRITE_THROUGHS:
+        await asyncio.gather(*list(_INFLIGHT_WRITE_THROUGHS))
+
+    assert len(uploads) == 1
+    assert uploads[0]["file_key"] == "write-through"
+    assert uploads[0]["z"] == 3
+    assert uploads[0]["x"] == 2
+    assert uploads[0]["y"] == 3
+    assert uploads[0]["fmt"] == "webp"
+    # Body is the rendered tile bytes — non-zero (or, if we happened
+    # to land on a fully-transparent coord, ``transparent_tile_bytes``
+    # is still non-zero because it's a precomputed image).
+    assert uploads[0]["nbytes"] > 0
+
+
+async def test_cache_hit_does_not_write_through_again(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LRU hits are the steady-state hot path; they must NOT
+    re-upload to R2 — the in-memory cache already has the bytes and
+    R2 has them too (from the cold-render write-through). Re-issuing
+    a PUT on every hit would burn Class A ops for zero benefit."""
+    from aeroza.tiles.cache import TilePngCache, set_default_cache
+
+    set_default_cache(TilePngCache(max_bytes=1024 * 1024))
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("hit-test", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    uploads: list[str] = []
+
+    class _CountingR2:
+        async def put_tile(self, **kw: object) -> None:
+            uploads.append(str(kw.get("file_key")))
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.get_default_r2_client", lambda: _CountingR2())
+
+    # Cold render — should upload once.
+    await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=hit-test")
+    from aeroza.query.v1.mrms import _INFLIGHT_WRITE_THROUGHS
+
+    while _INFLIGHT_WRITE_THROUGHS:
+        await asyncio.gather(*list(_INFLIGHT_WRITE_THROUGHS))
+    assert len(uploads) == 1
+
+    # Cache hit — must NOT upload again.
+    await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=hit-test")
+    while _INFLIGHT_WRITE_THROUGHS:
+        await asyncio.gather(*list(_INFLIGHT_WRITE_THROUGHS))
+    assert len(uploads) == 1, "cache hits must not trigger redundant R2 uploads"
+
+
+async def test_write_through_is_skipped_when_r2_is_unconfigured(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When AEROZA_R2_* env vars are unset (local dev, tests by
+    default), ``get_default_r2_client`` returns ``None`` and the
+    write-through branch is a clean no-op — the cold render path is
+    otherwise identical."""
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("no-r2", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    # Explicit: pretend R2 isn't configured.
+    monkeypatch.setattr("aeroza.query.v1.mrms.get_default_r2_client", lambda: None)
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=no-r2")
+    assert response.status_code == 200
+
+    # Drain any in-flight tasks (defensive — there shouldn't be any).
+    from aeroza.query.v1.mrms import _INFLIGHT_WRITE_THROUGHS
+
+    while _INFLIGHT_WRITE_THROUGHS:
+        await asyncio.gather(*list(_INFLIGHT_WRITE_THROUGHS))
+
+
+async def test_write_through_failure_does_not_break_response(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An R2 upload that 503s or 403s must not impact the client. The
+    response was already serialised before the background task ran,
+    and a write-through failure is logged + swallowed inside
+    ``_write_through_to_r2``."""
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("r2-blowup", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    class _ExplodingR2:
+        async def put_tile(self, **_kw: object) -> None:
+            raise RuntimeError("simulated R2 outage")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.get_default_r2_client", lambda: _ExplodingR2())
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=r2-blowup")
+    assert response.status_code == 200
+
+    # Drain the failing task so the test doesn't leak it across cases.
+    from aeroza.query.v1.mrms import _INFLIGHT_WRITE_THROUGHS
+
+    while _INFLIGHT_WRITE_THROUGHS:
+        await asyncio.gather(*list(_INFLIGHT_WRITE_THROUGHS), return_exceptions=True)
 
 
 async def test_pinned_tile_emits_immutable_cache_header_and_caches_server_side(

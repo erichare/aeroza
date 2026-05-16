@@ -57,6 +57,7 @@ from aeroza.query.mrms_sample import (
 )
 from aeroza.query.parsers import parse_polygon
 from aeroza.tiles.cache import CacheKey, get_default_cache
+from aeroza.tiles.r2 import R2Client, get_default_r2_client
 from aeroza.tiles.raster import (
     TILE_FORMAT_CONTENT_TYPE,
     TileFormat,
@@ -103,6 +104,56 @@ _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 _TILE_CACHE_HEADER_LIVE: str = (
     f"public, max-age={_TILE_CACHE_SECONDS_LIVE}, stale-while-revalidate={_TILE_SWR_SECONDS_LIVE}"
 )
+
+
+# Strong-ref'd in-flight write-through tasks. asyncio's event loop
+# only holds weak refs to ``create_task`` returns, so without this set
+# the GC can drop a task mid-upload — fire-and-forget is still
+# fire-and-forget, but we track the references so the runtime
+# can't reap them prematurely. Entries self-remove on completion.
+_INFLIGHT_WRITE_THROUGHS: set[asyncio.Task[None]] = set()
+
+
+async def _write_through_to_r2(
+    *,
+    r2_client: R2Client,
+    file_key: str,
+    z: int,
+    x: int,
+    y: int,
+    fmt: TileFormat,
+    body: bytes,
+) -> None:
+    """Background-upload a freshly-rendered tile to R2.
+
+    This is the *write-through cache* path that backstops the prewarm
+    subscriber. The intent: every cold render the on-demand route
+    performs also lands a copy in R2, so the next request for the same
+    ``(fileKey, z, x, y, fmt)`` from the static CDN origin returns 200
+    instead of 404. Once the prewarm subscriber is delivering events
+    reliably this path becomes a no-op (R2 already has the tile and
+    ``put_tile`` overwrites silently), but until then the on-demand
+    fallback **populates the CDN as the radar UI uses it** — a
+    self-healing path that means a user landing on /map with an empty
+    R2 bucket converges to "fully cached" within a few page loads.
+
+    Failures here are logged and swallowed; the original render
+    response has already been queued for return to the client, and the
+    R2 upload happening or not is invisible to that request.
+    """
+    try:
+        await r2_client.put_tile(file_key=file_key, z=z, x=x, y=y, fmt=fmt, body=body)
+    except Exception as exc:
+        log.warning(
+            "tile.r2_write_through_failed",
+            file_key=file_key,
+            z=z,
+            x=x,
+            y=y,
+            format=fmt,
+            exc_class=type(exc).__name__,
+            exc_message=str(exc),
+        )
 
 
 def _transparent_tile_response(tile_format: TileFormat) -> Response:
@@ -550,6 +601,31 @@ async def get_mrms_tile_route(
                 ) from exc
             cache.put(cache_key, body)
             cache_status = "miss"
+            # Write-through to R2 — backstops the prewarm subscriber.
+            # Every on-demand cold render also lands a copy at the
+            # static CDN origin, so subsequent requests for the same
+            # tile from any client come from the CDN instead of the
+            # API. The upload is fire-and-forget so the response we're
+            # about to return isn't blocked on R2 acknowledging the
+            # PUT (the user's tile is identical with or without the
+            # R2 write succeeding). When ``r2_client`` is None (local
+            # dev / unconfigured) this branch is a no-op.
+            r2_client = get_default_r2_client()
+            if r2_client is not None:
+                task = asyncio.create_task(
+                    _write_through_to_r2(
+                        r2_client=r2_client,
+                        file_key=grid.file_key,
+                        z=z,
+                        x=x,
+                        y=y,
+                        fmt=tile_format,
+                        body=body,
+                    ),
+                    name=f"tile.r2_write_through:{grid.file_key}:{z}/{x}/{y}",
+                )
+                _INFLIGHT_WRITE_THROUGHS.add(task)
+                task.add_done_callback(_INFLIGHT_WRITE_THROUGHS.discard)
 
         cache_control = (
             _TILE_CACHE_HEADER_PINNED if file_key is not None else _TILE_CACHE_HEADER_LIVE
