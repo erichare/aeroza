@@ -256,6 +256,15 @@ export function AlertsMap({
   // below) so a remount doesn't think the prior map's sources still
   // exist on the new one.
   const frameSourceKeysRef = useRef<Set<string>>(new Set());
+  // Track which fileKeys we've already bulk-prewarmed via ``Image()``
+  // requests. The bulk prewarm exists because the multi-source frame
+  // layers start invisible — MapLibre won't fetch their tiles until a
+  // frame becomes visible, which means iter 1 of the loop has a blank
+  // gap between fade-out and tiles-arriving on every frame. Warming
+  // them into the browser HTTP cache up front collapses that gap to
+  // zero. De-duped so a sliding loop window only prewarms newly-added
+  // frames, not the whole set every minute.
+  const prewarmedKeysRef = useRef<Set<string>>(new Set());
 
   // Build the map exactly once. Strict mode's mount→cleanup→remount within
   // the same tick wrecks MapLibre's WebGL context, so we defer the actual
@@ -494,6 +503,11 @@ export function AlertsMap({
         // start.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         frameSourceKeysRef.current.clear();
+        // Same rationale as frameSourceKeysRef — the prewarm dedup set
+        // is map-instance-scoped (a remount may want to re-prewarm at
+        // a fresh viewport), so wipe it when the map is destroyed.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        prewarmedKeysRef.current.clear();
       }
     };
     // `radarFileKey` and `showRadar` are read here only to seed the
@@ -764,13 +778,13 @@ export function AlertsMap({
   // separating "show this frame" from "warm the next" keeps either
   // path debuggable in isolation.
   //
-  // Skipped in multi-source mode — each frame has its own MapLibre
-  // source whose tile cache survives across the loop, so a manual
-  // ``new Image()`` warm-up is redundant (and would just compete with
-  // MapLibre's own fetch on first encounter).
+  // Runs in both single-source and multi-source modes. In multi-source
+  // mode it complements the bulk-prewarm effect below by handling
+  // viewport changes mid-loop (a pan or zoom invalidates the
+  // bulk-prewarm's tile coords; this effect re-warms the next frame
+  // at the current viewport).
   useEffect(() => {
     if (!ready || !showRadar) return;
-    if ((radarFrames?.length ?? 0) > 0) return;
     if (!prefetchNextFileKey) return;
     if (prefetchNextFileKey === radarFileKey) return; // already on screen
     const map = mapRef.current;
@@ -798,6 +812,63 @@ export function AlertsMap({
       for (const img of requested) img.src = "";
     };
   }, [ready, showRadar, prefetchNextFileKey, radarFileKey, radarFrames]);
+
+  // Bulk pre-warm every loop frame's tiles via ``Image()`` requests so
+  // the per-frame visibility toggle finds the bytes already in the
+  // browser HTTP cache.
+  //
+  // Why this exists: multi-source mode adds a separate MapLibre raster
+  // source per fileKey, all starting at ``visibility: none``. MapLibre
+  // intentionally does not fetch tiles for invisible sources — which
+  // means on iter 1 of the loop, each frame's tiles only start loading
+  // the moment it becomes visible. Between the previous frame fading
+  // out (~180ms) and the new frame's tiles arriving (network + decode),
+  // the layer paints blank. The visible symptom: tiles disappear and
+  // reappear constantly on the first pass through the loop.
+  //
+  // Warming the HTTP cache up front collapses that gap to zero — when
+  // MapLibre flips the layer to visible and requests its tiles, the
+  // browser serves them from cache instantly. The server holds pinned
+  // tiles forever-immutable (Cache-Control: max-age=14400 + LRU on
+  // the API), so once warmed, every subsequent loop iteration is a
+  // pure cache hit.
+  //
+  // De-duped via ``prewarmedKeysRef`` so a sliding window (loopGrids
+  // updates every minute as new MRMS grids land) only prewarms newly-
+  // added frames, not the whole set. The browser handles per-origin
+  // concurrency throttling — no explicit cap needed.
+  useEffect(() => {
+    if (!ready || !showRadar) return;
+    if (!radarFrames || radarFrames.length === 0) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const tiles = visibleTileCoords(map);
+    if (tiles.length === 0) return;
+
+    const requested: HTMLImageElement[] = [];
+    for (const frame of radarFrames) {
+      if (prewarmedKeysRef.current.has(frame.fileKey)) continue;
+      prewarmedKeysRef.current.add(frame.fileKey);
+      const urlTemplate = buildRadarTileUrl(frame.fileKey);
+      for (const { z, x, y } of tiles) {
+        const url = urlTemplate
+          .replace("{z}", String(z))
+          .replace("{x}", String(x))
+          .replace("{y}", String(y));
+        const img = new Image();
+        img.decoding = "async";
+        img.src = url;
+        requested.push(img);
+      }
+    }
+
+    return () => {
+      // Cancel in-flight prewarms when the effect re-runs (e.g. a new
+      // frame slid into the loop window). Completed fetches stay in
+      // the browser HTTP cache regardless.
+      for (const img of requested) img.src = "";
+    };
+  }, [ready, showRadar, radarFrames]);
 
   function applyToSource(
     collection: AlertFeatureCollection,
