@@ -7,6 +7,11 @@ import type { NextConfig } from "next";
  * non-default backend (e.g. a remote staging instance). When unset the
  * client falls back to `http://localhost:8000`, which matches the FastAPI
  * default and `make dev`.
+ *
+ * `NEXT_PUBLIC_AEROZA_TILES_URL` points at the static R2 origin
+ * (production: `https://tiles.aeroza.app`). When unset the dashboard
+ * falls back to the on-demand FastAPI tile route — slower but works
+ * without an R2 bucket, so `make dev` is still viable.
  */
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -17,6 +22,10 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_AEROZA_API_URL:
       process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000",
+    // Empty default — buildRadarTileUrlTemplate's runtime guard
+    // routes through the FastAPI fallback when this is blank.
+    NEXT_PUBLIC_AEROZA_TILES_URL:
+      process.env.NEXT_PUBLIC_AEROZA_TILES_URL ?? "",
   },
 };
 

@@ -24,6 +24,7 @@ from aeroza.stream.nats import (
 )
 from aeroza.tiles.cache import get_default_cache
 from aeroza.tiles.prewarm import run_prewarm_consumer
+from aeroza.tiles.r2 import get_default_r2_client
 from aeroza.webhooks.routes import router as webhooks_router
 from aeroza.webhooks.rule_routes import router as alert_rules_router
 
@@ -71,10 +72,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             nats_client = await stack.enter_async_context(nats_connection(settings.nats_url))
             subscriber = NatsAlertSubscriber(nats_client)
             grid_subscriber = NatsMrmsGridSubscriber(nats_client)
+            # R2 is the production publication target; the LRU stays
+            # wired as a fallback so local dev (no R2 configured)
+            # still benefits from pre-rendered bytes on the on-demand
+            # FastAPI route. ``get_default_r2_client`` returns None
+            # when any of the AEROZA_R2_* env vars is blank.
+            r2_client = get_default_r2_client()
             prewarm_task = asyncio.create_task(
                 run_prewarm_consumer(
                     subscriber=grid_subscriber,
-                    cache=get_default_cache(),
+                    r2_client=r2_client,
+                    lru_cache=get_default_cache() if r2_client is None else None,
                 ),
                 name="tiles.prewarm.consumer",
             )

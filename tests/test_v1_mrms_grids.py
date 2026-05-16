@@ -224,6 +224,96 @@ async def test_limit_above_max_returns_422(api_client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
+# ---------------------------------------------------------------------------
+# GET /v1/mrms/latest
+#
+# Compact "what's the freshest grid" pointer used by the dashboard's
+# 30s live-pin poll. The radar UI fetches this, then loads tiles
+# directly from the CDN-backed static origin keyed on the returned
+# fileKey — so this endpoint is the *only* API round-trip a live
+# map needs once tile bytes have been hoisted off the request path.
+# ---------------------------------------------------------------------------
+
+LATEST_ROUTE: str = "/v1/mrms/latest"
+
+
+async def test_latest_returns_404_when_catalog_is_empty(api_client: AsyncClient) -> None:
+    response = await api_client.get(LATEST_ROUTE)
+    assert response.status_code == 404
+
+
+async def test_latest_returns_newest_materialised_grid(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    files = (
+        _file("oldest", valid_at=datetime(2026, 5, 1, 11, 58, tzinfo=UTC)),
+        _file("newest", valid_at=datetime(2026, 5, 1, 12, 2, tzinfo=UTC)),
+        _file("middle", valid_at=datetime(2026, 5, 1, 12, 0, tzinfo=UTC)),
+    )
+    await _seed(
+        integration_db,
+        files=files,
+        locators=tuple(_locator(f.key) for f in files),
+    )
+
+    response = await api_client.get(LATEST_ROUTE)
+    assert response.status_code == 200
+    body = response.json()
+    # Pointer-only shape — no zarr_uri, no shape/dtype/nbytes. Keeps
+    # the polled payload sub-100-bytes so the dashboard's network
+    # panel stays tidy.
+    assert body == {
+        "fileKey": "newest",
+        "validAt": "2026-05-01T12:02:00Z",
+        "product": "MergedReflectivityComposite",
+        "level": "00.50",
+    }
+    # Short-freshness + generous stale-while-revalidate so the
+    # browser + Cloudflare can hand back the cached pointer while
+    # asynchronously refreshing. New grids land every ~2 minutes.
+    cache_control = response.headers["cache-control"]
+    assert "max-age=15" in cache_control
+    assert "stale-while-revalidate=30" in cache_control
+
+
+async def test_latest_filters_by_product_and_level(
+    api_client: AsyncClient, integration_db: Database
+) -> None:
+    """The dashboard could in principle ask for a non-default product
+    (PrecipRate, VIL, …). The filter must scope the "latest" answer
+    correctly — otherwise an unrelated product's newer grid would
+    leak through and confuse the radar pin."""
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    files = (
+        _file(
+            "ref-newer",
+            product="MergedReflectivityComposite",
+            level="00.50",
+            valid_at=base + timedelta(minutes=2),
+        ),
+        _file(
+            "rate-older",
+            product="PrecipRate",
+            level="00.00",
+            valid_at=base,
+        ),
+    )
+    await _seed(
+        integration_db,
+        files=files,
+        locators=tuple(_locator(f.key) for f in files),
+    )
+
+    response = await api_client.get(
+        LATEST_ROUTE, params={"product": "PrecipRate", "level": "00.00"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["fileKey"] == "rate-older"
+    assert body["product"] == "PrecipRate"
+    assert body["level"] == "00.00"
+
+
 async def test_since_after_until_returns_400(api_client: AsyncClient) -> None:
     response = await api_client.get(
         LIST_ROUTE,

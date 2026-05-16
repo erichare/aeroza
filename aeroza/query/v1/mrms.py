@@ -15,6 +15,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.query.dependencies import DatabaseDep, get_session
@@ -277,6 +278,86 @@ async def list_mrms_grids_route(
         limit=limit,
     )
     return MrmsGridList(items=[mrms_grid_view_to_item(v) for v in views])
+
+
+class MrmsLatestResponse(BaseModel):
+    """Compact pointer at the latest materialised grid for a product/level.
+
+    The radar UI polls this every 30s to pin its tile source at the
+    newest available ``file_key``, then loads tiles from
+    ``tiles.aeroza.app/{file_key}/{z}/{x}/{y}.webp`` — the CDN-backed
+    static origin. Returning just ``{file_key, valid_at}`` (instead of
+    the full ``MrmsGridItem``) keeps the polled payload tiny — sub-100
+    bytes — which is what allows aggressive ``stale-while-revalidate``
+    caching at the edge without bloating the dashboard's network
+    panel.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    file_key: str = Field(serialization_alias="fileKey")
+    valid_at: datetime = Field(serialization_alias="validAt")
+    product: str
+    level: str
+
+
+@router.get(
+    "/mrms/latest",
+    response_model=MrmsLatestResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=False,
+    summary="Latest-grid pointer for the radar dashboard",
+    description=(
+        "Returns ``{fileKey, validAt, product, level}`` for the most "
+        "recent materialised MRMS grid matching the requested "
+        "product/level. The radar UI polls this endpoint every 30s as "
+        "its live-mode pin — tile bytes come from the static "
+        "``tiles.aeroza.app`` CDN origin, so this is the only API "
+        "round-trip the live map needs.\n\n"
+        "Caching: ``Cache-Control: public, max-age=15, "
+        "stale-while-revalidate=30``. Short freshness because a new "
+        "grid lands every ~2 minutes; the SWR window keeps the radar "
+        "loop responsive when MRMS is briefly behind."
+    ),
+    responses={
+        404: {"description": "No grid has been materialised for the requested product/level."},
+    },
+)
+async def get_latest_mrms_grid_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    product: Annotated[
+        str,
+        Query(description="MRMS product (e.g. 'MergedReflectivityComposite')."),
+    ] = "MergedReflectivityComposite",
+    level: Annotated[
+        str,
+        Query(description="MRMS product level (e.g. '00.50')."),
+    ] = "00.50",
+) -> Response:
+    grid = await find_latest_mrms_grid(session, product=product, level=level)
+    if grid is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no materialised grid for product={product!r} level={level!r}",
+        )
+    payload = MrmsLatestResponse(
+        file_key=grid.file_key,
+        valid_at=grid.valid_at,
+        product=grid.product,
+        level=grid.level,
+    )
+    return Response(
+        content=payload.model_dump_json(by_alias=True),
+        media_type="application/json",
+        headers={
+            # Short freshness, generous stale-while-revalidate window —
+            # same shape as the live tile route's header but applied to
+            # the JSON pointer. Browsers + Cloudflare hand back the
+            # stale value while asynchronously refreshing, so the
+            # radar dashboard never blocks on this poll.
+            "Cache-Control": "public, max-age=15, stale-while-revalidate=30",
+        },
+    )
 
 
 @router.get(

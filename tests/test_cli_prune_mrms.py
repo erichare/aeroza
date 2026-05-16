@@ -86,8 +86,19 @@ async def test_drive_once_invokes_each_prune_exactly_once(
         db: Database,
         retention_hours: float,
         batch_size: int,
+        r2_client: object | None = None,
     ) -> PruneResult:
-        mrms_calls.append({"db": db, "retention_hours": retention_hours, "batch_size": batch_size})
+        # ``r2_client`` is accepted to match the new keyword in the
+        # production signature; we don't exercise the R2 path in this
+        # CLI-glue test, so a default of None is fine.
+        mrms_calls.append(
+            {
+                "db": db,
+                "retention_hours": retention_hours,
+                "batch_size": batch_size,
+                "r2_client": r2_client,
+            }
+        )
         return PruneResult(deleted_files=2, deleted_zarrs=4)
 
     async def fake_alerts(*, db: Database, retention_days: int) -> PruneResult:
