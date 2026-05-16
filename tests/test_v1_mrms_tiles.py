@@ -306,6 +306,72 @@ async def test_oserror_also_falls_back_to_transparent(
     assert (alpha == 0).all()
 
 
+async def test_arbitrary_exception_in_renderer_falls_back_to_transparent(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route's catch-all swallows any unexpected exception class.
+
+    The radar loop hammers tiles continuously; a single 500 spike taints
+    MapLibre's raster source and breaks the radar UI until the page
+    reloads. So we don't want to be picky about which exception
+    classes deserve a transparent fallback — anything that's not an
+    intentional HTTPException becomes a blank frame plus a structured
+    warning log. Production-observed culprits we'd otherwise leak as
+    500s include SQLAlchemy pool exhaustion, numpy/Pillow MemoryError
+    under burst, and transient backend exceptions we haven't catalogued
+    yet.
+    """
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("surprise", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    def _explode(**_kw: object) -> bytes:
+        # RuntimeError is the most "this isn't IO and isn't a known
+        # class" signal we have — proves the catch is by exception
+        # base, not by a hand-curated allowlist.
+        raise RuntimeError("totally unexpected render-time failure")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.render_tile_image", _explode)
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=surprise")
+    assert response.status_code == 200
+    alpha = _decode_alpha(response.content)
+    assert (alpha == 0).all()
+    assert "max-age=60" in response.headers["cache-control"]
+    assert "immutable" not in response.headers["cache-control"]
+
+
+async def test_db_lookup_failure_falls_back_to_transparent(
+    api_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLAlchemy raising during the catalog lookup is the most likely
+    real-world cause of 500s on a small Railway dyno: a burst of 60+
+    radar-loop tiles can saturate ``pool_size=5 + max_overflow=5``
+    when each session is held through the 1-6s render. We want pool
+    exhaustion (and any other DBAPIError) to surface as a blank frame
+    via the route's outer catch-all, not a 500.
+    """
+
+    async def _explode(*_args: object, **_kw: object) -> object:
+        # Generic Exception — proves the outer catch isn't keyed on a
+        # specific SQLAlchemy class. The actual production error
+        # surface includes ``TimeoutError``, ``OperationalError``,
+        # ``DBAPIError``, etc.
+        raise RuntimeError("simulated DB failure during grid lookup")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.find_mrms_grid_by_key", _explode)
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=anything")
+    assert response.status_code == 200
+    alpha = _decode_alpha(response.content)
+    assert (alpha == 0).all()
+    assert "max-age=60" in response.headers["cache-control"]
+
+
 async def test_keyerror_still_502s_for_structural_grid_bug(
     api_client: AsyncClient,
     integration_db: Database,
