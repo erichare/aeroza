@@ -12,9 +12,19 @@ the DB cleanup a one-liner — deleting one file row drops the matching
 grid, every nowcast derived from it, and every verification scored
 against either side. The filesystem side isn't in the cascade, so the
 worker collects every ``zarr_uri`` referenced by the doomed rows
-first, then ``rm -rf``s each path, then issues the single DELETE. The
-order matters: if the DB delete went first, a partial failure on disk
-would leave orphan Zarr directories with no DB row to find them by.
+first, commits the DB delete, **then** ``rm -rf``s each path outside
+the transaction.
+
+The DB-before-disk order is deliberate: while a live tile request
+might race the sweeper, once the row is gone, the route's
+``find_mrms_grid_by_key`` returns None and the transparent-tile
+fallback kicks in — no 500. The opposite ordering (disk first) opens
+a race window where a concurrent request can read the row's
+``zarr_uri`` and call ``xr.open_zarr`` on a directory we've already
+``rm -rf``d, raising ``FileNotFoundError`` from inside the renderer.
+Orphan Zarr directories from a partial disk-delete failure are
+recoverable (a future sweep can detect zarr paths with no catalog
+row); user-visible 500s are not.
 
 Batching
 --------
@@ -100,11 +110,25 @@ async def prune_old_mrms_once(
             if not keys:
                 break
 
+            # Collect zarr paths *before* the delete — the FK cascade
+            # would clear the rows that hold the URIs, leaving nothing
+            # for the disk pass to act on.
             zarr_paths = await _collect_zarr_paths_for_keys(session, keys=keys)
-            fs_result = _remove_zarr_paths(zarr_paths)
 
+            # DB row delete commits first. Once this lands, any live
+            # request resolving to one of these keys gets a None from
+            # ``find_mrms_grid_by_key`` and hits the transparent-tile
+            # fallback — no opportunity to call ``xr.open_zarr`` on a
+            # path we're about to remove.
             deleted_files = await _delete_file_rows(session, keys=keys)
             await session.commit()
+
+        # Outside the session: the rows are committed-gone, so it is
+        # now safe to remove the on-disk artefacts. A failure here
+        # produces orphan Zarr directories (recoverable via a future
+        # orphan sweep) rather than a 500 surfaced to the client mid-
+        # render.
+        fs_result = _remove_zarr_paths(zarr_paths)
 
         batch_result = PruneResult(
             deleted_files=deleted_files,
