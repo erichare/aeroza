@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, stat
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aeroza.query.dependencies import get_session
+from aeroza.query.dependencies import DatabaseDep, get_session
 from aeroza.query.mrms import (
     DEFAULT_LIMIT as MRMS_DEFAULT_LIMIT,
 )
@@ -308,7 +308,7 @@ async def list_mrms_grids_route(
     },
 )
 async def get_mrms_tile_route(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    db: DatabaseDep,
     z: Annotated[int, Path(ge=0, le=_TILE_MAX_ZOOM, description="Zoom level (0–10).")],
     x: Annotated[int, Path(ge=0, description="Tile column.")],
     y: Annotated[int, Path(ge=0, description="Tile row.")],
@@ -341,20 +341,10 @@ async def get_mrms_tile_route(
     ] = None,
 ) -> Response:
     tile_format: TileFormat = _negotiate_tile_format(accept)
-    if file_key is not None:
-        grid = await find_mrms_grid_by_key(session, file_key)
-    else:
-        grid = await find_latest_mrms_grid(session, product=product, level=level)
 
-    if grid is None:
-        # Return a transparent tile rather than a 404 — the MapLibre
-        # raster source aggressively retries 404s, which would spam the
-        # API with tiles outside the materialised grid's coverage. The
-        # short live-mode TTL applies whether or not the caller passed
-        # a fileKey: even a "missing pinned grid" answer can flip when
-        # the materialiser catches up, so we don't promise immutability.
-        return _transparent_tile_response(tile_format)
-
+    # Cheap, sync coord validation BEFORE any DB / render work — these
+    # are caller bugs (z is already bounded by FastAPI's Path
+    # validator) and should propagate as 400, not be smoothed over.
     n = 1 << z
     if x >= n or y >= n:
         raise HTTPException(
@@ -362,93 +352,167 @@ async def get_mrms_tile_route(
             detail=f"tile coords out of range for zoom {z} (max x/y = {n - 1})",
         )
 
-    # Server-side LRU keyed by (file_key, z, x, y, format). The route
-    # has already resolved the request to a concrete ``grid.file_key``
-    # — whether the caller asked for ``?fileKey=…`` (pinned) or relied
-    # on the "latest" fallback — so the cache key is identical in both
-    # cases. Live-mode used to be excluded out of fear that "latest"
-    # could race the materialiser; in practice every cached entry is
-    # keyed on a specific file_key, and the entry is correct for that
-    # file_key forever. The Cache-Control header on the response is
-    # what differs (immutable vs short max-age) — the cache itself is
-    # safe to populate either way.
-    cache = get_default_cache()
-    cache_key = CacheKey(file_key=grid.file_key, z=z, x=x, y=y, format=tile_format)
-    cached_bytes: bytes | None = cache.get(cache_key)
+    # Defense in depth: ANY unhandled exception from the lookup / render
+    # / encode path falls back to a transparent tile rather than a 500.
+    # Live tile requests are not user-facing API calls — they're a
+    # MapLibre raster source repeatedly hammering for tiles to paint.
+    # A 500 spike there taints the source and breaks the radar UI for
+    # the rest of the session; a blank frame is recovered by the next
+    # poll. Causes we've seen or anticipate:
+    #
+    #   * ``xr.open_zarr`` raising FileNotFoundError when the retention
+    #     sweeper races with a live request (closed by PR #91, but the
+    #     transparent-tile fallback survives any retention-order
+    #     regression).
+    #   * SQLAlchemy connection pool exhaustion under burst load
+    #     (``pool_size=5, max_overflow=5`` total → 10 connections; a
+    #     radar-loop salvo of 60+ concurrent tiles can saturate this
+    #     during the 1-6s render window when each session is held for
+    #     the duration of its render). Surfaces as ``TimeoutError`` /
+    #     ``DBAPIError`` — neither in the IOError family.
+    #   * numpy / Pillow raising under memory pressure on a small
+    #     Railway dyno.
+    #   * Anything else we haven't seen yet.
+    #
+    # ``HTTPException`` is re-raised inside the catch so intentional
+    # 4xx/5xx returns (400 above, 502 for structural grid bugs below)
+    # still flow through FastAPI's normal error response handling.
+    try:
+        # Acquire a session JUST for the catalog lookup, then release
+        # it before the (potentially seconds-long) render. The
+        # previous shape held the session for the full request
+        # lifetime via ``Depends(get_session)``, which capped
+        # throughput at ``pool_size + max_overflow`` concurrent
+        # renders (10 on the default Railway config). With renders
+        # taking 1-6s and the radar loop firing ~30 concurrent tile
+        # requests per frame, the pool saturated under burst and the
+        # waiters that timed out surfaced as 500s. Lookup-only
+        # sessions are ~10ms each, so the pool now serves on the
+        # order of hundreds of req/s.
+        async with db.sessionmaker() as session:
+            if file_key is not None:
+                grid = await find_mrms_grid_by_key(session, file_key)
+            else:
+                grid = await find_latest_mrms_grid(session, product=product, level=level)
 
-    if cached_bytes is not None:
-        body = cached_bytes
-        cache_status = "hit"
-    else:
-        # Cap concurrent renders. Without this back-pressure a radar-
-        # loop pan storm fans out into uncapped worker threads and the
-        # API self-503s under its own load. The semaphore only guards
-        # the cold-render path — cache hits above skip it entirely.
-        try:
-            async with get_render_semaphore():
-                body = await asyncio.to_thread(
-                    render_tile_image,
+        if grid is None:
+            # Return a transparent tile rather than a 404 — the MapLibre
+            # raster source aggressively retries 404s, which would spam
+            # the API with tiles outside the materialised grid's
+            # coverage. The short live-mode TTL applies whether or not
+            # the caller passed a fileKey: even a "missing pinned grid"
+            # answer can flip when the materialiser catches up, so we
+            # don't promise immutability.
+            return _transparent_tile_response(tile_format)
+
+        # Server-side LRU keyed by (file_key, z, x, y, format). The
+        # route has already resolved the request to a concrete
+        # ``grid.file_key`` — whether the caller asked for
+        # ``?fileKey=…`` (pinned) or relied on the "latest" fallback —
+        # so the cache key is identical in both cases. Live-mode used
+        # to be excluded out of fear that "latest" could race the
+        # materialiser; in practice every cached entry is keyed on a
+        # specific file_key, and the entry is correct for that
+        # file_key forever. The Cache-Control header on the response
+        # is what differs (immutable vs short max-age) — the cache
+        # itself is safe to populate either way.
+        cache = get_default_cache()
+        cache_key = CacheKey(file_key=grid.file_key, z=z, x=x, y=y, format=tile_format)
+        cached_bytes: bytes | None = cache.get(cache_key)
+
+        if cached_bytes is not None:
+            body = cached_bytes
+            cache_status = "hit"
+        else:
+            # Cap concurrent renders. Without this back-pressure a
+            # radar-loop pan storm fans out into uncapped worker
+            # threads and the API self-503s under its own load. The
+            # semaphore only guards the cold-render path — cache hits
+            # above skip it entirely.
+            try:
+                async with get_render_semaphore():
+                    body = await asyncio.to_thread(
+                        render_tile_image,
+                        zarr_uri=grid.zarr_uri,
+                        variable=grid.variable,
+                        z=z,
+                        x=x,
+                        y=y,
+                        format=tile_format,
+                    )
+            except (FileNotFoundError, OSError) as exc:
+                # Specific case worth its own log event — storage gone
+                # underneath us is the single most common cause we've
+                # seen and is worth a dedicated counter for retention
+                # tuning. The outer ``except Exception`` below would
+                # also catch this, but with a less specific event name.
+                log.warning(
+                    "tile.storage_unavailable",
+                    file_key=grid.file_key,
                     zarr_uri=grid.zarr_uri,
-                    variable=grid.variable,
                     z=z,
                     x=x,
                     y=y,
-                    format=tile_format,
+                    exc_class=type(exc).__name__,
+                    exc_message=str(exc),
                 )
-        except (FileNotFoundError, OSError) as exc:
-            # The Zarr backing this catalog row is gone or unreadable.
-            # Causes we've seen in production: the retention sweeper
-            # ``rm -rf``ing the directory between row-read and
-            # ``xr.open_zarr``; an ephemeral Railway volume getting
-            # wiped on redeploy while the catalog DB persists; transient
-            # object-store IO blips. None of these are user errors, so
-            # serve a transparent tile with the live TTL instead of
-            # 500ing — the radar loop renders one blank frame and the
-            # next poll recovers. We log structured so we can graph the
-            # rate and tune retention if it's spiking.
-            log.warning(
-                "tile.storage_unavailable",
-                file_key=grid.file_key,
-                zarr_uri=grid.zarr_uri,
-                z=z,
-                x=x,
-                y=y,
-                exc_class=type(exc).__name__,
-                exc_message=str(exc),
-            )
-            return _transparent_tile_response(tile_format)
-        except KeyError as exc:
-            # Variable not in Zarr → grid in catalog is structurally
-            # broken (schema mismatch with the renderer's expectations,
-            # not a transient storage hiccup). Surface as 502 so the
-            # caller knows this is upstream-data wrong, not transient.
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"grid storage missing variable: {exc}",
-            ) from exc
-        cache.put(cache_key, body)
-        cache_status = "miss"
+                return _transparent_tile_response(tile_format)
+            except KeyError as exc:
+                # Variable not in Zarr → grid in catalog is structurally
+                # broken (schema mismatch with the renderer's
+                # expectations, not a transient storage hiccup).
+                # Surface as 502 so the caller knows this is
+                # upstream-data wrong, not transient.
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"grid storage missing variable: {exc}",
+                ) from exc
+            cache.put(cache_key, body)
+            cache_status = "miss"
 
-    cache_control = _TILE_CACHE_HEADER_PINNED if file_key is not None else _TILE_CACHE_HEADER_LIVE
-    return Response(
-        content=body,
-        media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
-        headers={
-            "Cache-Control": cache_control,
-            # Negotiated on Accept — declare it so shared caches
-            # partition correctly between the PNG and WebP variants.
-            "Vary": "Accept",
-            # Including the source key in headers lets clients (and our
-            # smoke tests) verify which grid populated a tile without
-            # decoding the PNG.
-            "X-Aeroza-Grid-Key": grid.file_key,
-            "X-Aeroza-Grid-Valid-At": grid.valid_at.isoformat(),
-            # ``hit`` / ``miss`` for pinned tiles, ``bypass`` for live
-            # mode (cache deliberately skipped). Useful for the
-            # browser devtools-driven sanity check in the radar loop.
-            "X-Aeroza-Tile-Cache": cache_status,
-        },
-    )
+        cache_control = (
+            _TILE_CACHE_HEADER_PINNED if file_key is not None else _TILE_CACHE_HEADER_LIVE
+        )
+        return Response(
+            content=body,
+            media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
+            headers={
+                "Cache-Control": cache_control,
+                # Negotiated on Accept — declare it so shared caches
+                # partition correctly between the PNG and WebP variants.
+                "Vary": "Accept",
+                # Including the source key in headers lets clients
+                # (and our smoke tests) verify which grid populated a
+                # tile without decoding the PNG.
+                "X-Aeroza-Grid-Key": grid.file_key,
+                "X-Aeroza-Grid-Valid-At": grid.valid_at.isoformat(),
+                # ``hit`` / ``miss`` for pinned tiles, ``bypass`` for
+                # live mode (cache deliberately skipped). Useful for
+                # the browser devtools-driven sanity check in the
+                # radar loop.
+                "X-Aeroza-Tile-Cache": cache_status,
+            },
+        )
+    except HTTPException:
+        # Intentional 4xx/5xx — let FastAPI handle response shaping.
+        raise
+    except Exception as exc:
+        # Unknown failure on the tile path. Logged with full traceback
+        # so we can fix the root cause; meanwhile the user sees a
+        # blank frame instead of a 500-burst breaking the radar source.
+        log.warning(
+            "tile.unexpected_error",
+            file_key=file_key,
+            product=product,
+            level=level,
+            z=z,
+            x=x,
+            y=y,
+            exc_class=type(exc).__name__,
+            exc_message=str(exc),
+            exc_info=True,
+        )
+        return _transparent_tile_response(tile_format)
 
 
 @router.get(
