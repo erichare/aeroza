@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +64,8 @@ from aeroza.tiles.raster import (
 )
 from aeroza.tiles.render_pool import get_render_semaphore
 
+log = structlog.get_logger(__name__)
+
 router = APIRouter(tags=["mrms"])
 
 
@@ -99,6 +102,35 @@ _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 _TILE_CACHE_HEADER_LIVE: str = (
     f"public, max-age={_TILE_CACHE_SECONDS_LIVE}, stale-while-revalidate={_TILE_SWR_SECONDS_LIVE}"
 )
+
+
+def _transparent_tile_response(tile_format: TileFormat) -> Response:
+    """Return a fully-transparent tile in the negotiated format.
+
+    Used as a graceful fallback for three different failure modes:
+
+    1. No grid materialised yet (``grid is None``).
+    2. The catalog row resolves but its ``zarr_uri`` is gone from
+       disk (retention race, volume wipe, or partial deploy).
+    3. The catalog row resolves but the Zarr store throws an IO
+       error mid-read.
+
+    All three share the same live-mode Cache-Control so the client
+    doesn't memoise the absence forever — the next materialiser pass
+    or deploy can fix the underlying storage, and a 60s freshness
+    window keeps the radar loop responsive when the fix lands.
+    """
+    return Response(
+        content=transparent_tile_bytes(format=tile_format),
+        media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
+        headers={
+            "Cache-Control": _TILE_CACHE_HEADER_LIVE,
+            # Same body across both formats; declaring the negotiated
+            # dimension lets shared caches partition by Accept
+            # correctly when CDNs eventually sit in front.
+            "Vary": "Accept",
+        },
+    )
 
 
 def _negotiate_tile_format(accept: str | None) -> TileFormat:
@@ -321,17 +353,7 @@ async def get_mrms_tile_route(
         # short live-mode TTL applies whether or not the caller passed
         # a fileKey: even a "missing pinned grid" answer can flip when
         # the materialiser catches up, so we don't promise immutability.
-        return Response(
-            content=transparent_tile_bytes(format=tile_format),
-            media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
-            headers={
-                "Cache-Control": _TILE_CACHE_HEADER_LIVE,
-                # Same body shape across both formats; declaring the
-                # negotiated dimension lets shared caches partition by
-                # Accept correctly when CDNs eventually sit in front.
-                "Vary": "Accept",
-            },
-        )
+        return _transparent_tile_response(tile_format)
 
     n = 1 << z
     if x >= n or y >= n:
@@ -373,8 +395,33 @@ async def get_mrms_tile_route(
                     y=y,
                     format=tile_format,
                 )
+        except (FileNotFoundError, OSError) as exc:
+            # The Zarr backing this catalog row is gone or unreadable.
+            # Causes we've seen in production: the retention sweeper
+            # ``rm -rf``ing the directory between row-read and
+            # ``xr.open_zarr``; an ephemeral Railway volume getting
+            # wiped on redeploy while the catalog DB persists; transient
+            # object-store IO blips. None of these are user errors, so
+            # serve a transparent tile with the live TTL instead of
+            # 500ing — the radar loop renders one blank frame and the
+            # next poll recovers. We log structured so we can graph the
+            # rate and tune retention if it's spiking.
+            log.warning(
+                "tile.storage_unavailable",
+                file_key=grid.file_key,
+                zarr_uri=grid.zarr_uri,
+                z=z,
+                x=x,
+                y=y,
+                exc_class=type(exc).__name__,
+                exc_message=str(exc),
+            )
+            return _transparent_tile_response(tile_format)
         except KeyError as exc:
-            # Variable not in Zarr → grid in catalog is broken; surface as 502.
+            # Variable not in Zarr → grid in catalog is structurally
+            # broken (schema mismatch with the renderer's expectations,
+            # not a transient storage hiccup). Surface as 502 so the
+            # caller knows this is upstream-data wrong, not transient.
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"grid storage missing variable: {exc}",

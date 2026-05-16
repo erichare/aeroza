@@ -326,6 +326,59 @@ async def test_prune_old_mrms_handles_missing_zarr_paths(
 
 
 @pytest.mark.integration
+async def test_prune_old_mrms_commits_db_before_touching_disk(
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _truncate_after_each: None,
+) -> None:
+    """DB row deletion commits *before* the filesystem rm-rf pass runs.
+
+    This is the property that prevents tile 500s from racing the
+    sweeper: by the time disk-delete starts, any concurrent live
+    request resolving these keys gets a None from
+    ``find_mrms_grid_by_key`` and falls back to a transparent tile —
+    rather than reading a still-present row whose ``zarr_uri`` we've
+    already removed and then ``FileNotFoundError``-ing inside the
+    renderer.
+
+    To assert the ordering directly, we monkeypatch ``_remove_zarr_paths``
+    to raise. If the DB delete happens first (correct order), the row
+    is gone even when the exception propagates. If the disk delete
+    happened first (old order), the raise would short-circuit before
+    the DELETE committed and the row would survive.
+    """
+    now = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    obs_zarr = tmp_path / "obs.zarr"
+    _make_zarr_dir(obs_zarr)
+
+    async with integration_db.sessionmaker() as session:
+        await upsert_mrms_files(
+            session, [_mrms_file(FILE_KEY_OLD, valid_at=now - timedelta(hours=24))]
+        )
+        await upsert_mrms_grid(
+            session, _grid_locator(file_key=FILE_KEY_OLD, zarr_uri=str(obs_zarr))
+        )
+        await session.commit()
+
+    def _explode(_paths: object) -> object:
+        raise RuntimeError("simulated disk failure")
+
+    monkeypatch.setattr("aeroza.retention.worker._remove_zarr_paths", _explode)
+
+    with pytest.raises(RuntimeError, match="simulated disk failure"):
+        await prune_old_mrms_once(db=integration_db, retention_hours=6, batch_size=100, now=now)
+
+    # DB row was deleted before the disk failure surfaced. This is the
+    # key invariant: a live request that races the sweeper will see
+    # the row gone and fall back rather than render against a path
+    # we're about to remove.
+    async with integration_db.sessionmaker() as session:
+        remaining = (await session.execute(select(MrmsFileRow.key))).scalars().all()
+    assert list(remaining) == []
+
+
+@pytest.mark.integration
 async def test_prune_old_mrms_batches_large_sets(
     integration_db: Database,
     tmp_path: Path,

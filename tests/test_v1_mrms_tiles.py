@@ -229,6 +229,108 @@ async def test_unknown_file_key_falls_back_to_transparent(
     assert (alpha == 0).all()
 
 
+async def test_render_failure_falls_back_to_transparent_with_live_ttl(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the Zarr backing a cataloged grid is unreachable from the
+    renderer — retention race, Railway volume wipe, transient IO blip —
+    the route serves a transparent tile + the live TTL instead of 500.
+
+    The radar loop's perspective is what matters: one blank frame
+    every few minutes is recoverable; a 500 spike that taints the
+    browser's MapLibre raster source is not. The live TTL (not the
+    immutable pinned header) is the other half — we deliberately
+    don't memoise this absence forever because the next materialiser
+    pass or deploy can fix the underlying storage.
+    """
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("ghost", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    # Simulate the storage being gone underneath us. We monkeypatch the
+    # renderer (rather than rm-rf'ing the directory) because xarray's
+    # exact exception class for a missing zarr varies by version /
+    # backend, but the route's handler is keyed on the
+    # FileNotFoundError / OSError family that production has actually
+    # surfaced — pinning the test to that contract.
+    def _explode(**_kw: object) -> bytes:
+        raise FileNotFoundError("simulated zarr deletion mid-request")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.render_tile_image", _explode)
+
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=ghost",
+        headers={"Accept": "image/png"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    # Live TTL + stale-while-revalidate, NOT the immutable pinned
+    # header — clients must re-check, because the absence is
+    # transient.
+    assert "max-age=60" in response.headers["cache-control"]
+    assert "stale-while-revalidate=120" in response.headers["cache-control"]
+    assert "immutable" not in response.headers["cache-control"]
+    # No grid-key header — the helper produces a generic transparent
+    # response, identical in shape to the "no grid materialised" path.
+    assert "x-aeroza-grid-key" not in response.headers
+    alpha = _decode_alpha(response.content)
+    assert (alpha == 0).all()
+
+
+async def test_oserror_also_falls_back_to_transparent(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OSError (generic IO failure on the zarr backend — permission
+    denied, broken pipe, object-store 503, etc.) takes the same
+    transparent-tile fallback path as FileNotFoundError. We don't want
+    a transient backend hiccup to surface as a 500 spike either.
+    """
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("io-error", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    def _explode(**_kw: object) -> bytes:
+        raise OSError("simulated backend IO failure")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.render_tile_image", _explode)
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=io-error")
+    assert response.status_code == 200
+    alpha = _decode_alpha(response.content)
+    assert (alpha == 0).all()
+
+
+async def test_keyerror_still_502s_for_structural_grid_bug(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KeyError stays a 502: it signals the variable isn't in the Zarr
+    store, which is a structural data bug (renderer expectation vs
+    materialised grid mismatch), not a transient storage hiccup. The
+    caller should know the upstream data is wrong so it can be fixed
+    rather than papering over with a transparent tile.
+    """
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("schema-bug", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    def _explode(**_kw: object) -> bytes:
+        raise KeyError("variable 'reflectivity' not in store")
+
+    monkeypatch.setattr("aeroza.query.v1.mrms.render_tile_image", _explode)
+
+    response = await api_client.get("/v1/mrms/tiles/3/2/3.png?fileKey=schema-bug")
+    assert response.status_code == 502
+
+
 async def test_pinned_tile_emits_immutable_cache_header_and_caches_server_side(
     api_client: AsyncClient, integration_db: Database, tmp_path: Path
 ) -> None:
