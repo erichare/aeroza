@@ -36,6 +36,7 @@ from aeroza.retention.worker import (
     prune_old_mrms_once,
 )
 from aeroza.shared.db import Database, create_engine_and_session
+from aeroza.tiles.r2 import R2Client, get_default_r2_client
 
 log = structlog.get_logger(__name__)
 
@@ -121,20 +122,29 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
     db = create_engine_and_session(settings.database_url)
+    # Resolve the R2 client once at startup. ``None`` when AEROZA_R2_*
+    # env is unset — local dev path. The worker degrades gracefully:
+    # Zarr disk delete still runs, only the R2 cleanup is skipped.
+    r2_client = get_default_r2_client()
     try:
-        await _drive(db=db, args=args)
+        await _drive(db=db, args=args, r2_client=r2_client)
         return 0
     finally:
         await db.dispose()
 
 
-async def _drive(*, db: Database, args: argparse.Namespace) -> None:
+async def _drive(
+    *,
+    db: Database,
+    args: argparse.Namespace,
+    r2_client: R2Client | None = None,
+) -> None:
     if args.once:
-        await _tick(db=db, args=args)
+        await _tick(db=db, args=args, r2_client=r2_client)
         return
 
     async def tick() -> None:
-        await _tick(db=db, args=args)
+        await _tick(db=db, args=args, r2_client=r2_client)
 
     loop = IntervalLoop(tick=tick, interval_s=args.interval, name=LOOP_NAME)
     stopper = asyncio.Event()
@@ -146,7 +156,12 @@ async def _drive(*, db: Database, args: argparse.Namespace) -> None:
         await loop.stop()
 
 
-async def _tick(*, db: Database, args: argparse.Namespace) -> PruneResult:
+async def _tick(
+    *,
+    db: Database,
+    args: argparse.Namespace,
+    r2_client: R2Client | None = None,
+) -> PruneResult:
     """One prune cycle. Errors in either step are logged and swallowed —
     the loop must not die on a transient DB hiccup, and the worker is
     re-runnable so dropped work is picked up next tick.
@@ -158,6 +173,7 @@ async def _tick(*, db: Database, args: argparse.Namespace) -> PruneResult:
             db=db,
             retention_hours=args.retention_hours,
             batch_size=batch_size,
+            r2_client=r2_client,
         )
     except Exception as exc:
         log.exception("prune_mrms.tick.mrms_failed", error=str(exc))
@@ -179,6 +195,8 @@ async def _tick(*, db: Database, args: argparse.Namespace) -> PruneResult:
         deleted_zarrs=combined.deleted_zarrs,
         failed_zarrs=combined.failed_zarrs,
         deleted_alerts=combined.deleted_alerts,
+        deleted_r2_objects=combined.deleted_r2_objects,
+        failed_r2_grids=combined.failed_r2_grids,
     )
     return combined
 

@@ -113,7 +113,8 @@ async def test_prewarm_populates_cache_for_every_zoom_format(tmp_path: Path) -> 
 
     stats = await prewarm_tiles_for_grid(
         _locator(uri),
-        cache=cache,
+        r2_client=None,
+        lru_cache=cache,
         zooms=(4,),
         formats=("png", "webp"),
     )
@@ -121,7 +122,7 @@ async def test_prewarm_populates_cache_for_every_zoom_format(tmp_path: Path) -> 
     expected = len(conus_tile_coords(4)) * 2  # zooms × formats
     assert stats.rendered == expected
     assert stats.failed == 0
-    assert stats.skipped_cached == 0
+    assert stats.skipped_existing == 0
 
     # Every (z, x, y, fmt) pair we just rendered should be retrievable.
     for x, y in conus_tile_coords(4):
@@ -135,16 +136,98 @@ async def test_prewarm_skips_already_cached_entries(tmp_path: Path) -> None:
     uri = _write_conus_grid(tmp_path / "g.zarr")
     cache = TilePngCache(max_bytes=8 * 1024 * 1024)
 
-    first = await prewarm_tiles_for_grid(_locator(uri), cache=cache, zooms=(4,), formats=("png",))
+    first = await prewarm_tiles_for_grid(
+        _locator(uri), r2_client=None, lru_cache=cache, zooms=(4,), formats=("png",)
+    )
     assert first.rendered > 0
-    assert first.skipped_cached == 0
+    assert first.skipped_existing == 0
 
     # Re-prewarming the same grid (e.g. NATS at-least-once redelivery)
     # must be a no-op — every entry should be skipped, not re-rendered.
-    second = await prewarm_tiles_for_grid(_locator(uri), cache=cache, zooms=(4,), formats=("png",))
+    second = await prewarm_tiles_for_grid(
+        _locator(uri), r2_client=None, lru_cache=cache, zooms=(4,), formats=("png",)
+    )
     assert second.rendered == 0
     assert second.failed == 0
-    assert second.skipped_cached == first.rendered
+    assert second.skipped_existing == first.rendered
+
+
+async def test_prewarm_uploads_to_r2_when_client_supplied(tmp_path: Path) -> None:
+    """With an R2 client the LRU path is bypassed entirely — every
+    rendered tile becomes a ``put_tile`` call. This is the production
+    path: tile bytes live in Cloudflare R2 + fronted by the CDN, not
+    inside any single API replica's memory.
+    """
+    uri = _write_conus_grid(tmp_path / "g.zarr")
+
+    class _FakeR2:
+        def __init__(self) -> None:
+            self.uploads: list[tuple[str, int, int, int, str, int]] = []
+
+        async def put_tile(
+            self,
+            *,
+            file_key: str,
+            z: int,
+            x: int,
+            y: int,
+            fmt: str,
+            body: bytes,
+        ) -> None:
+            self.uploads.append((file_key, z, x, y, fmt, len(body)))
+
+        async def object_exists(self, *, file_key: str, z: int, x: int, y: int, fmt: str) -> bool:
+            return False
+
+    fake_r2 = _FakeR2()
+
+    stats = await prewarm_tiles_for_grid(
+        _locator(uri),
+        r2_client=fake_r2,  # type: ignore[arg-type]
+        lru_cache=None,
+        zooms=(4,),
+        formats=("webp",),
+    )
+
+    expected = len(conus_tile_coords(4))
+    assert stats.rendered == expected
+    assert stats.failed == 0
+    assert stats.skipped_existing == 0
+    # Every CONUS coord at z=4 was uploaded; key shape carries fileKey,
+    # zoom, coords, and format so the route layer is unambiguous.
+    assert len(fake_r2.uploads) == expected
+    for fk, z, _x, _y, fmt, nbytes in fake_r2.uploads:
+        assert fk == "k1"
+        assert z == 4
+        assert fmt == "webp"
+        assert nbytes > 0
+
+
+async def test_prewarm_skips_r2_objects_that_already_exist(tmp_path: Path) -> None:
+    """When R2 reports an object already exists, the render is skipped
+    entirely — saves both CPU (Pillow encode) and a Class A op
+    (redundant ``put_object``). NATS at-least-once redelivery is the
+    obvious trigger; a re-deploy mid-event is the other.
+    """
+    uri = _write_conus_grid(tmp_path / "g.zarr")
+
+    class _AlwaysExistsR2:
+        async def put_tile(self, **_kw: object) -> None:
+            raise AssertionError("put_tile must not run when object_exists is True")
+
+        async def object_exists(self, **_kw: object) -> bool:
+            return True
+
+    stats = await prewarm_tiles_for_grid(
+        _locator(uri),
+        r2_client=_AlwaysExistsR2(),  # type: ignore[arg-type]
+        lru_cache=None,
+        zooms=(4,),
+        formats=("webp",),
+    )
+    assert stats.rendered == 0
+    assert stats.failed == 0
+    assert stats.skipped_existing == len(conus_tile_coords(4))
 
 
 async def test_prewarm_continues_on_per_tile_render_error(tmp_path: Path) -> None:
@@ -162,7 +245,9 @@ async def test_prewarm_continues_on_per_tile_render_error(tmp_path: Path) -> Non
         nbytes=0,
     )
 
-    stats = await prewarm_tiles_for_grid(bogus, cache=cache, zooms=(4,), formats=("png",))
+    stats = await prewarm_tiles_for_grid(
+        bogus, r2_client=None, lru_cache=cache, zooms=(4,), formats=("png",)
+    )
     assert stats.rendered == 0
     assert stats.failed == len(conus_tile_coords(4))
 
@@ -176,7 +261,8 @@ async def test_consumer_processes_grids_until_cancelled(tmp_path: Path) -> None:
     consumer = asyncio.create_task(
         run_prewarm_consumer(
             subscriber=subscriber,
-            cache=cache,
+            r2_client=None,
+            lru_cache=cache,
             zooms=(4,),
             formats=("png",),
         )
@@ -223,7 +309,8 @@ async def test_consumer_swallows_per_event_errors(tmp_path: Path) -> None:
     consumer = asyncio.create_task(
         run_prewarm_consumer(
             subscriber=subscriber,
-            cache=cache,
+            r2_client=None,
+            lru_cache=cache,
             zooms=(4,),
             formats=("png",),
         )

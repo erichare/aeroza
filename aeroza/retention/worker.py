@@ -52,6 +52,7 @@ from aeroza.ingest.mrms_models import MrmsFileRow
 from aeroza.ingest.nws_alerts_models import NwsAlertRow
 from aeroza.nowcast.models import NowcastRow
 from aeroza.shared.db import Database
+from aeroza.tiles.r2 import R2Client
 
 log = structlog.get_logger(__name__)
 
@@ -66,6 +67,8 @@ class PruneResult:
     deleted_zarrs: int = 0
     failed_zarrs: int = 0
     deleted_alerts: int = 0
+    deleted_r2_objects: int = 0
+    failed_r2_grids: int = 0
 
     def merged_with(self, other: PruneResult) -> PruneResult:
         return PruneResult(
@@ -73,6 +76,8 @@ class PruneResult:
             deleted_zarrs=self.deleted_zarrs + other.deleted_zarrs,
             failed_zarrs=self.failed_zarrs + other.failed_zarrs,
             deleted_alerts=self.deleted_alerts + other.deleted_alerts,
+            deleted_r2_objects=self.deleted_r2_objects + other.deleted_r2_objects,
+            failed_r2_grids=self.failed_r2_grids + other.failed_r2_grids,
         )
 
 
@@ -85,6 +90,7 @@ async def prune_old_mrms_once(
     retention_hours: float,
     batch_size: int = DEFAULT_BATCH_SIZE,
     now: datetime | None = None,
+    r2_client: R2Client | None = None,
 ) -> PruneResult:
     """Prune MRMS files (and their cascades) older than ``retention_hours``.
 
@@ -92,6 +98,11 @@ async def prune_old_mrms_once(
     cutoff, removes every Zarr store referenced by their grid / nowcast
     catalog rows, then deletes the file rows in batches. FK cascades
     drop ``mrms_grids``, ``mrms_nowcasts``, and ``nowcast_verifications``.
+
+    When ``r2_client`` is supplied, also deletes the pre-rendered tile
+    pyramid under each pruned ``file_key/`` prefix — same DB-before-
+    disk ordering applies, and orphan R2 objects are caught by the
+    bucket's lifecycle rule as a backstop.
 
     ``now`` is injectable so tests can pin time without monkeypatching
     ``datetime.now``. Defaults to ``datetime.now(UTC)``.
@@ -130,10 +141,20 @@ async def prune_old_mrms_once(
         # render.
         fs_result = _remove_zarr_paths(zarr_paths)
 
+        # R2 tile cleanup — same DB-before-disk ordering as the
+        # Zarr pass. By the time we get here the catalog row is gone,
+        # so a future live request will route through the
+        # transparent-tile fallback whether or not the R2 delete
+        # succeeds. Failures count as ``failed_r2_grids`` and are
+        # backstopped by the bucket's lifecycle rule.
+        r2_result = await _delete_r2_grids(r2_client, keys=keys)
+
         batch_result = PruneResult(
             deleted_files=deleted_files,
             deleted_zarrs=fs_result.deleted,
             failed_zarrs=fs_result.failed,
+            deleted_r2_objects=r2_result.deleted_objects,
+            failed_r2_grids=r2_result.failed_grids,
         )
         log.info(
             "retention.mrms.batch",
@@ -141,6 +162,8 @@ async def prune_old_mrms_once(
             deleted_files=batch_result.deleted_files,
             deleted_zarrs=batch_result.deleted_zarrs,
             failed_zarrs=batch_result.failed_zarrs,
+            deleted_r2_objects=batch_result.deleted_r2_objects,
+            failed_r2_grids=batch_result.failed_r2_grids,
         )
         total = total.merged_with(batch_result)
 
@@ -156,6 +179,8 @@ async def prune_old_mrms_once(
         deleted_files=total.deleted_files,
         deleted_zarrs=total.deleted_zarrs,
         failed_zarrs=total.failed_zarrs,
+        deleted_r2_objects=total.deleted_r2_objects,
+        failed_r2_grids=total.failed_r2_grids,
     )
     return total
 
@@ -199,6 +224,46 @@ async def prune_expired_alerts_once(
 class _FsResult:
     deleted: int
     failed: int
+
+
+@dataclass(frozen=True, slots=True)
+class _R2Result:
+    deleted_objects: int
+    failed_grids: int
+
+
+async def _delete_r2_grids(
+    r2_client: R2Client | None,
+    *,
+    keys: Sequence[str],
+) -> _R2Result:
+    """Best-effort delete of every R2 tile under each pruned file_key.
+
+    When ``r2_client is None`` (R2 disabled in local dev / tests),
+    this is a no-op returning all zeros. Failures are logged and
+    counted but never raised — orphan R2 objects are recoverable via
+    the bucket's lifecycle rule, but a sweeper that aborts on a
+    transient 503 from Cloudflare would leave a long tail of
+    un-pruned grids.
+    """
+    if r2_client is None or not keys:
+        return _R2Result(deleted_objects=0, failed_grids=0)
+
+    deleted_objects = 0
+    failed_grids = 0
+    for file_key in keys:
+        try:
+            removed = await r2_client.delete_grid(file_key=file_key)
+        except Exception as exc:
+            failed_grids += 1
+            log.warning(
+                "retention.r2.delete_failed",
+                file_key=file_key,
+                error=str(exc),
+            )
+            continue
+        deleted_objects += removed
+    return _R2Result(deleted_objects=deleted_objects, failed_grids=failed_grids)
 
 
 async def _select_expired_file_keys(

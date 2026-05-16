@@ -47,7 +47,101 @@ import {
 export const API_BASE: string =
   process.env.NEXT_PUBLIC_AEROZA_API_URL ?? "http://localhost:8000";
 
+/**
+ * Static-origin URL for pre-rendered radar tiles (Cloudflare R2 fronted
+ * by ``tiles.aeroza.app``). When ``NEXT_PUBLIC_AEROZA_TILES_URL`` is
+ * unset (local dev), this falls back to ``null`` and the URL builder
+ * routes through the on-demand FastAPI tile route instead. The build
+ * step inlines the env value, so production deployments must set this
+ * in Vercel for the static-tile path to be active.
+ */
+export const TILES_BASE: string | null = (() => {
+  const raw = process.env.NEXT_PUBLIC_AEROZA_TILES_URL?.trim();
+  return raw && raw.length > 0 ? raw.replace(/\/$/, "") : null;
+})();
+
 const client = new AerozaClient({ apiBase: API_BASE });
+
+/**
+ * Build the MapLibre raster-source tile template for a pinned grid.
+ *
+ * Production path (``TILES_BASE`` set): returns the R2 static origin
+ * URL. The path mirrors the bucket's object key 1:1 —
+ * ``{fileKey}/{z}/{x}/{y}.webp`` — and MapLibre substitutes
+ * ``{z}/{x}/{y}`` per tile. Cache-Control on the underlying objects
+ * is ``public, max-age=31536000, immutable``, so once an edge POP
+ * fetches a tile, every subsequent request is a free cache hit.
+ *
+ * Fallback path (``TILES_BASE`` null): returns the legacy on-demand
+ * FastAPI route. Same shape today's deployed code uses; lets local
+ * dev (no R2) and the materialisation-lag window (first ~30s after
+ * a grid lands) still work, just slower.
+ *
+ * ``fileKey`` may contain path separators (real MRMS keys are
+ * ``CONUS/MergedReflectivityComposite_00.50/.../...grib2.gz``). We
+ * encode segment-by-segment for the R2 path so the slashes stay as
+ * path separators, and as a single component for the legacy
+ * ``?fileKey=`` query param.
+ */
+export function buildRadarTileUrlTemplate(
+  fileKey: string,
+  format: "webp" | "png" = "webp",
+): string {
+  if (TILES_BASE !== null) {
+    const encodedKey = fileKey.split("/").map(encodeURIComponent).join("/");
+    return `${TILES_BASE}/${encodedKey}/{z}/{x}/{y}.${format}`;
+  }
+  // Legacy fallback. PNG extension is the URL-shape hangover from
+  // MapLibre's tile-template grammar — the FastAPI route serves WebP
+  // when ``Accept: image/webp`` is present, which every browser sends.
+  return `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?fileKey=${encodeURIComponent(fileKey)}`;
+}
+
+/**
+ * Live-mode tile template, when the caller doesn't yet have a pinned
+ * ``file_key``. Only relevant on the legacy fallback path — the
+ * static R2 origin has no "live" URL, every tile is keyed on a
+ * concrete fileKey. Callers using ``TILES_BASE`` should poll
+ * :func:`fetchMrmsLatest` to resolve the latest fileKey first.
+ */
+export function buildLiveRadarTileUrlTemplate(): string {
+  // Cache-bust so MapLibre re-fetches when the materialiser produces a
+  // newer grid in the ~30s window before the next /v1/mrms/latest poll
+  // catches up. This only fires when TILES_BASE is unset.
+  return `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png?_=${Date.now()}`;
+}
+
+export interface MrmsLatestResponse {
+  fileKey: string;
+  validAt: string;
+  product: string;
+  level: string;
+}
+
+/**
+ * Poll the API for the most recent materialised grid's
+ * ``{fileKey, validAt}``. The radar dashboard uses this every 30s as
+ * its live-mode pin — tile bytes come from the static origin, so this
+ * is the only API round-trip a "live" map needs.
+ */
+export async function fetchMrmsLatest(opts: {
+  product?: string;
+  level?: string;
+} = {}): Promise<MrmsLatestResponse> {
+  const params = new URLSearchParams();
+  if (opts.product) params.set("product", opts.product);
+  if (opts.level) params.set("level", opts.level);
+  const url = `${API_BASE}/v1/mrms/latest${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `fetchMrmsLatest failed: HTTP ${response.status} ${response.statusText}`,
+    );
+  }
+  return (await response.json()) as MrmsLatestResponse;
+}
 
 // ---------------------------------------------------------------------------
 // Re-exported wire types — components import these as before.

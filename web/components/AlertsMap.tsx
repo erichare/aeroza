@@ -10,10 +10,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  API_BASE,
   type AlertFeature,
   type AlertFeatureCollection,
   type Severity,
+  buildLiveRadarTileUrlTemplate,
+  buildRadarTileUrlTemplate,
   fetchAlerts,
 } from "@/lib/api";
 import { loadUsStateBoundaries } from "@/lib/usStates";
@@ -39,6 +40,14 @@ const RADAR_FRAME_LAYER_PREFIX = "mrms-radar-frame-layer:";
 // (200 ms) — anything longer would have the previous frame still
 // fading out as the next one tried to fade in, which reads as ghosting.
 const RADAR_FRAME_FADE_MS = 180;
+// Highest zoom level the tile origin actually serves. R2 holds
+// z=2..8 — beyond that we let MapLibre's GPU overzoom take over
+// (z=8 is already at MRMS's ~1km native cell size, so anything
+// finer is interpolation regardless). The legacy FastAPI fallback
+// route serves up to z=10 but at this resolution there's no
+// signal-quality difference, and the lower cap cuts our R2 write
+// + storage footprint by ~16x compared to z=10.
+const RADAR_MAX_ZOOM = 8;
 // Only prefetch a small center-biased subset of the next frame. MapLibre
 // will still request every visible tile once the frame becomes visible;
 // this lookahead is just a latency hint, not a second full tile loader.
@@ -337,7 +346,7 @@ export function AlertsMap({
         tiles: [buildRadarTileUrl(radarFileKey)],
         tileSize: 256,
         minzoom: 0,
-        maxzoom: 10,
+        maxzoom: RADAR_MAX_ZOOM,
         attribution: "MRMS · NOAA / NSSL",
       });
       map.addLayer(
@@ -719,7 +728,7 @@ export function AlertsMap({
           tiles: [buildRadarTileUrl(fileKey)],
           tileSize: 256,
           minzoom: 0,
-          maxzoom: 10,
+          maxzoom: RADAR_MAX_ZOOM,
           attribution: "MRMS · NOAA / NSSL",
         });
       }
@@ -1065,11 +1074,19 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
  * and the route's query parser treats them as opaque.
  */
 function buildRadarTileUrl(fileKey: string | null): string {
-  const base = `${API_BASE}/v1/mrms/tiles/{z}/{x}/{y}.png`;
-  if (fileKey === null) {
-    return `${base}?_=${Date.now()}`;
+  // Pinned mode: production hits the static R2 origin
+  // (``tiles.aeroza.app/{fileKey}/{z}/{x}/{y}.webp``); local dev
+  // falls through to the on-demand FastAPI route. Either way the
+  // URL is a MapLibre raster-source template — the ``{z}/{x}/{y}``
+  // placeholders are filled per-request by MapLibre, not by us.
+  if (fileKey !== null) {
+    return buildRadarTileUrlTemplate(fileKey, "webp");
   }
-  return `${base}?fileKey=${encodeURIComponent(fileKey)}`;
+  // Live mode (no pinned fileKey) is only reachable on the legacy
+  // FastAPI fallback path — once ``TILES_BASE`` is configured, the
+  // map page resolves to a concrete fileKey via ``/v1/mrms/latest``
+  // before it ever asks for a tile template here.
+  return buildLiveRadarTileUrlTemplate();
 }
 
 interface TileCoord {

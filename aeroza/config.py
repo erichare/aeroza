@@ -35,6 +35,28 @@ class Settings(BaseSettings):
     s3_secret_access_key: str | None = None
     s3_region: str = "us-east-1"
 
+    # Cloudflare R2 origin for pre-rendered tile pyramids. When all four
+    # ``r2_*`` settings are present, the materialiser prewarm subscriber
+    # uploads each rendered tile to ``r2_bucket`` instead of populating
+    # the in-process LRU, and the retention worker deletes the
+    # corresponding objects on its DB-commit pass. When any value is
+    # blank (e.g. local dev without R2), uploads short-circuit to a
+    # no-op and the FastAPI tile route falls back to on-demand renders
+    # — same shape the API has today.
+    #
+    # ``r2_endpoint`` is the S3-compatible endpoint Cloudflare hands out
+    # at <account-id>.r2.cloudflarestorage.com. ``r2_public_base_url``
+    # is the *public* origin the browser hits (custom domain like
+    # ``https://tiles.aeroza.app``); the bucket itself is private to
+    # writes, public to the CDN. The two are different on purpose so a
+    # bucket can be migrated without forcing every client to relearn the
+    # endpoint.
+    r2_endpoint: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_public_base_url: str | None = None
+
     api_key_salt: str = "dev-only-replace-me"
 
     # Comma-separated list of additional CORS origins to allow on top of

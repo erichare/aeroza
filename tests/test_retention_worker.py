@@ -95,6 +95,65 @@ def test_remove_zarr_paths_handles_empty_input() -> None:
 
 
 @pytest.mark.unit
+async def test_delete_r2_grids_noop_when_client_is_none() -> None:
+    """R2 disabled (local dev / tests without env) is the happy default
+    — the helper returns zeros without raising. Keeps the existing
+    Zarr-only retention path unchanged for callers who haven't opted
+    in to the static-tile architecture yet.
+    """
+    from aeroza.retention.worker import _delete_r2_grids
+
+    result = await _delete_r2_grids(None, keys=["a", "b", "c"])
+    assert result.deleted_objects == 0
+    assert result.failed_grids == 0
+
+
+@pytest.mark.unit
+async def test_delete_r2_grids_aggregates_per_key_deletes() -> None:
+    """Each fileKey gets its own ``delete_grid`` call; the totals are
+    summed. This is the production happy path — one prune tick can
+    sweep many expired grids and we want a single structured log
+    entry to summarise the lot."""
+    from aeroza.retention.worker import _delete_r2_grids
+
+    class _StubR2:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def delete_grid(self, *, file_key: str) -> int:
+            self.calls.append(file_key)
+            # Pretend each grid had 50 tiles. The exact number is
+            # opaque to the caller; it's just summed into the
+            # structured log.
+            return 50
+
+    stub = _StubR2()
+    result = await _delete_r2_grids(stub, keys=["a", "b", "c"])  # type: ignore[arg-type]
+    assert stub.calls == ["a", "b", "c"]
+    assert result.deleted_objects == 150
+    assert result.failed_grids == 0
+
+
+@pytest.mark.unit
+async def test_delete_r2_grids_swallows_per_key_failures() -> None:
+    """If one grid's R2 delete blows up (transient 503, IAM hiccup,
+    etc.), the rest must still proceed — the bucket lifecycle rule
+    backstops any orphan objects, and we don't want a single bad
+    response to abort the entire retention tick."""
+    from aeroza.retention.worker import _delete_r2_grids
+
+    class _FlakyR2:
+        async def delete_grid(self, *, file_key: str) -> int:
+            if file_key == "bad":
+                raise RuntimeError("simulated R2 outage")
+            return 10
+
+    result = await _delete_r2_grids(_FlakyR2(), keys=["good-1", "bad", "good-2"])  # type: ignore[arg-type]
+    assert result.deleted_objects == 20  # only the two good grids
+    assert result.failed_grids == 1
+
+
+@pytest.mark.unit
 async def test_prune_old_mrms_once_rejects_non_positive_retention() -> None:
     with pytest.raises(ValueError, match="retention_hours must be positive"):
         await prune_old_mrms_once(db=None, retention_hours=0)  # type: ignore[arg-type]
