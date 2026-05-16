@@ -97,8 +97,7 @@ _TILE_CACHE_HEADER_PINNED: str = "public, max-age=31536000, immutable"
 # refresh in the background, so users never see a blank gap during the
 # 60–180 s window after the previous MRMS frame ages out.
 _TILE_CACHE_HEADER_LIVE: str = (
-    f"public, max-age={_TILE_CACHE_SECONDS_LIVE}, "
-    f"stale-while-revalidate={_TILE_SWR_SECONDS_LIVE}"
+    f"public, max-age={_TILE_CACHE_SECONDS_LIVE}, stale-while-revalidate={_TILE_SWR_SECONDS_LIVE}"
 )
 
 
@@ -383,11 +382,7 @@ async def get_mrms_tile_route(
         cache.put(cache_key, body)
         cache_status = "miss"
 
-    cache_control = (
-        _TILE_CACHE_HEADER_PINNED
-        if file_key is not None
-        else _TILE_CACHE_HEADER_LIVE
-    )
+    cache_control = _TILE_CACHE_HEADER_PINNED if file_key is not None else _TILE_CACHE_HEADER_LIVE
     return Response(
         content=body,
         media_type=TILE_FORMAT_CONTENT_TYPE[tile_format],
