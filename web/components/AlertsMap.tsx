@@ -39,6 +39,11 @@ const RADAR_FRAME_LAYER_PREFIX = "mrms-radar-frame-layer:";
 // (200 ms) — anything longer would have the previous frame still
 // fading out as the next one tried to fade in, which reads as ghosting.
 const RADAR_FRAME_FADE_MS = 180;
+// Only prefetch a small center-biased subset of the next frame. MapLibre
+// will still request every visible tile once the frame becomes visible;
+// this lookahead is just a latency hint, not a second full tile loader.
+const RADAR_PREFETCH_MAX_TILES = 12;
+const PREFETCHED_TILE_URL_LIMIT = 4096;
 
 function frameSourceId(fileKey: string): string {
   return RADAR_FRAME_SOURCE_PREFIX + fileKey;
@@ -46,6 +51,17 @@ function frameSourceId(fileKey: string): string {
 
 function frameLayerId(fileKey: string): string {
   return RADAR_FRAME_LAYER_PREFIX + fileKey;
+}
+
+function setLayerVisibility(
+  map: MapLibreMap,
+  layerId: string,
+  visible: boolean,
+): void {
+  if (!map.getLayer(layerId)) return;
+  const next = visible ? "visible" : "none";
+  if (map.getLayoutProperty(layerId, "visibility") === next) return;
+  map.setLayoutProperty(layerId, "visibility", next);
 }
 
 // Insert radar layer just below the alert polygons so alerts stay on top
@@ -256,15 +272,15 @@ export function AlertsMap({
   // below) so a remount doesn't think the prior map's sources still
   // exist on the new one.
   const frameSourceKeysRef = useRef<Set<string>>(new Set());
-  // Track which fileKeys we've already bulk-prewarmed via ``Image()``
-  // requests. The bulk prewarm exists because the multi-source frame
-  // layers start invisible — MapLibre won't fetch their tiles until a
-  // frame becomes visible, which means iter 1 of the loop has a blank
-  // gap between fade-out and tiles-arriving on every frame. Warming
-  // them into the browser HTTP cache up front collapses that gap to
-  // zero. De-duped so a sliding loop window only prewarms newly-added
-  // frames, not the whole set every minute.
-  const prewarmedKeysRef = useRef<Set<string>>(new Set());
+  // Keep at most one previous radar frame visible while the next one
+  // loads. This avoids the "blank frame, then tiles pop back in" effect
+  // without prefetching every frame in the loop up front.
+  const visibleFrameKeyRef = useRef<string | null>(null);
+  // De-dupe next-frame prefetches. Completed URLs are remembered with a
+  // small FIFO cap; in-flight URLs are tracked separately so effect
+  // reruns don't duplicate requests before the browser resolves them.
+  const prefetchedTileUrlsRef = useRef<Set<string>>(new Set());
+  const prefetchInFlightUrlsRef = useRef<Set<string>>(new Set());
 
   // Build the map exactly once. Strict mode's mount→cleanup→remount within
   // the same tick wrecks MapLibre's WebGL context, so we defer the actual
@@ -503,11 +519,13 @@ export function AlertsMap({
         // start.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         frameSourceKeysRef.current.clear();
-        // Same rationale as frameSourceKeysRef — the prewarm dedup set
-        // is map-instance-scoped (a remount may want to re-prewarm at
-        // a fresh viewport), so wipe it when the map is destroyed.
+        // Map-instance-scoped request bookkeeping; wipe it so a remount
+        // can warm the new viewport honestly.
+        visibleFrameKeyRef.current = null;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        prewarmedKeysRef.current.clear();
+        prefetchedTileUrlsRef.current.clear();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        prefetchInFlightUrlsRef.current.clear();
       }
     };
     // `radarFileKey` and `showRadar` are read here only to seed the
@@ -581,13 +599,9 @@ export function AlertsMap({
   useEffect(() => {
     if (!ready || !mapRef.current) return;
     const map = mapRef.current;
-    if (!map.getLayer(RADAR_LAYER_ID)) return;
-    map.setLayoutProperty(
-      RADAR_LAYER_ID,
-      "visibility",
-      showRadar ? "visible" : "none",
-    );
-  }, [ready, showRadar]);
+    const framesActive = (radarFrames?.length ?? 0) > 0;
+    setLayerVisibility(map, RADAR_LAYER_ID, showRadar && !framesActive);
+  }, [ready, showRadar, radarFrames]);
 
   // Surface the radar source's tile-load state to the parent. The /map
   // auto-loop uses it to skip a frame when the previous frame's tiles
@@ -741,134 +755,106 @@ export function AlertsMap({
     }
   }, [ready, radarFrames]);
 
-  // Frame visibility — toggles which radar layer is on screen. In
-  // multi-source mode the matching frame layer goes ``visible`` and
-  // every other frame layer (plus the legacy single source) goes
-  // ``none``. In legacy mode the legacy single source's visibility
-  // tracks ``showRadar`` (handled by the dedicated effect above);
-  // here we leave it alone.
+  // Frame visibility. In multi-source mode we reveal the target frame
+  // immediately, but keep the previous frame visible until MapLibre
+  // reaches idle. That makes swaps additive while tiles are in flight:
+  // the new frame paints over the old one as it arrives instead of
+  // blanking the radar layer first.
   useEffect(() => {
     if (!ready || !mapRef.current) return;
     const map = mapRef.current;
     const framesActive = (radarFrames?.length ?? 0) > 0;
 
-    for (const fileKey of frameSourceKeysRef.current) {
-      const layerId = frameLayerId(fileKey);
-      if (!map.getLayer(layerId)) continue;
-      const visible = framesActive && showRadar && fileKey === radarFileKey;
-      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+    const hideAllFrameLayers = () => {
+      for (const fileKey of frameSourceKeysRef.current) {
+        setLayerVisibility(map, frameLayerId(fileKey), false);
+      }
+      visibleFrameKeyRef.current = null;
+    };
+
+    if (!framesActive || !showRadar || radarFileKey === null) {
+      hideAllFrameLayers();
+      if (framesActive) setLayerVisibility(map, RADAR_LAYER_ID, false);
+      return;
     }
 
-    // In multi-source mode, the legacy single layer must stay hidden
-    // — otherwise it'd paint a stale frame underneath the active
-    // multi-source layer. The dedicated legacy-visibility effect
-    // above handles the inverse case (frames mode off → legacy
-    // tracks showRadar).
-    if (framesActive && map.getLayer(RADAR_LAYER_ID)) {
-      map.setLayoutProperty(RADAR_LAYER_ID, "visibility", "none");
+    setLayerVisibility(map, RADAR_LAYER_ID, false);
+    const previousKey = visibleFrameKeyRef.current;
+    const targetKey = radarFileKey;
+
+    for (const fileKey of frameSourceKeysRef.current) {
+      const visible = fileKey === targetKey || fileKey === previousKey;
+      setLayerVisibility(map, frameLayerId(fileKey), visible);
     }
+
+    visibleFrameKeyRef.current = targetKey;
+
+    const hideStaleFrames = () => {
+      for (const fileKey of frameSourceKeysRef.current) {
+        setLayerVisibility(map, frameLayerId(fileKey), fileKey === targetKey);
+      }
+    };
+
+    if (previousKey && previousKey !== targetKey && !map.areTilesLoaded()) {
+      map.once("idle", hideStaleFrames);
+      return () => {
+        map.off("idle", hideStaleFrames);
+      };
+    }
+    hideStaleFrames();
   }, [ready, radarFileKey, showRadar, radarFrames]);
 
-  // Prefetch the next loop frame's tiles into the browser cache so the
-  // swap to that frame doesn't trigger a network round-trip. Pinned
-  // tiles are forever-immutable on the server (Cache-Control:
-  // immutable + a server-side LRU), so each (fileKey, viewport) only
-  // gets prefetched once. We deliberately do this in an effect keyed
-  // on ``prefetchNextFileKey`` rather than inside the swap loop —
-  // separating "show this frame" from "warm the next" keeps either
-  // path debuggable in isolation.
-  //
-  // Runs in both single-source and multi-source modes. In multi-source
-  // mode it complements the bulk-prewarm effect below by handling
-  // viewport changes mid-loop (a pan or zoom invalidates the
-  // bulk-prewarm's tile coords; this effect re-warms the next frame
-  // at the current viewport).
+  // Prefetch a bounded center-biased subset of the next loop frame's
+  // tiles. This is intentionally modest: MapLibre remains the only
+  // full-frame tile loader, while the Image() lookahead just reduces
+  // the perceived latency at the center of the viewport.
   useEffect(() => {
     if (!ready || !showRadar) return;
     if (!prefetchNextFileKey) return;
     if (prefetchNextFileKey === radarFileKey) return; // already on screen
     const map = mapRef.current;
     if (!map) return;
-    const tiles = visibleTileCoords(map);
+    const tiles = prioritizedTileCoords(
+      visibleTileCoords(map),
+      RADAR_PREFETCH_MAX_TILES,
+    );
     if (tiles.length === 0) return;
     const urlTemplate = buildRadarTileUrl(prefetchNextFileKey);
-    // Track Image refs locally so cleanup can null their .src — that
-    // cancels in-flight fetches in modern browsers (per HTML spec) and
-    // lets the ones that already finished get GC'd.
-    const requested: HTMLImageElement[] = [];
+    const completed = prefetchedTileUrlsRef.current;
+    const inFlight = prefetchInFlightUrlsRef.current;
+    const requested: TilePrefetchRequest[] = [];
     for (const { z, x, y } of tiles) {
       const url = urlTemplate
         .replace("{z}", String(z))
         .replace("{x}", String(x))
         .replace("{y}", String(y));
+      if (completed.has(url) || inFlight.has(url)) continue;
       const img = new Image();
+      const request: TilePrefetchRequest = { done: false, img, url };
+      inFlight.add(url);
       img.decoding = "async";
+      img.onload = () => {
+        request.done = true;
+        inFlight.delete(url);
+        rememberPrefetchedTileUrl(completed, url);
+      };
+      img.onerror = () => {
+        request.done = true;
+        inFlight.delete(url);
+      };
       img.src = url;
-      requested.push(img);
+      requested.push(request);
     }
     return () => {
-      // Aborts any still-loading prefetches when the loop advances or
-      // the user pauses. Browser cache keeps already-fetched tiles.
-      for (const img of requested) img.src = "";
-    };
-  }, [ready, showRadar, prefetchNextFileKey, radarFileKey, radarFrames]);
-
-  // Bulk pre-warm every loop frame's tiles via ``Image()`` requests so
-  // the per-frame visibility toggle finds the bytes already in the
-  // browser HTTP cache.
-  //
-  // Why this exists: multi-source mode adds a separate MapLibre raster
-  // source per fileKey, all starting at ``visibility: none``. MapLibre
-  // intentionally does not fetch tiles for invisible sources — which
-  // means on iter 1 of the loop, each frame's tiles only start loading
-  // the moment it becomes visible. Between the previous frame fading
-  // out (~180ms) and the new frame's tiles arriving (network + decode),
-  // the layer paints blank. The visible symptom: tiles disappear and
-  // reappear constantly on the first pass through the loop.
-  //
-  // Warming the HTTP cache up front collapses that gap to zero — when
-  // MapLibre flips the layer to visible and requests its tiles, the
-  // browser serves them from cache instantly. The server holds pinned
-  // tiles forever-immutable (Cache-Control: max-age=14400 + LRU on
-  // the API), so once warmed, every subsequent loop iteration is a
-  // pure cache hit.
-  //
-  // De-duped via ``prewarmedKeysRef`` so a sliding window (loopGrids
-  // updates every minute as new MRMS grids land) only prewarms newly-
-  // added frames, not the whole set. The browser handles per-origin
-  // concurrency throttling — no explicit cap needed.
-  useEffect(() => {
-    if (!ready || !showRadar) return;
-    if (!radarFrames || radarFrames.length === 0) return;
-    const map = mapRef.current;
-    if (!map) return;
-    const tiles = visibleTileCoords(map);
-    if (tiles.length === 0) return;
-
-    const requested: HTMLImageElement[] = [];
-    for (const frame of radarFrames) {
-      if (prewarmedKeysRef.current.has(frame.fileKey)) continue;
-      prewarmedKeysRef.current.add(frame.fileKey);
-      const urlTemplate = buildRadarTileUrl(frame.fileKey);
-      for (const { z, x, y } of tiles) {
-        const url = urlTemplate
-          .replace("{z}", String(z))
-          .replace("{x}", String(x))
-          .replace("{y}", String(y));
-        const img = new Image();
-        img.decoding = "async";
-        img.src = url;
-        requested.push(img);
+      for (const request of requested) {
+        if (request.done) continue;
+        request.img.onload = null;
+        request.img.onerror = null;
+        request.img.src = "";
+        inFlight.delete(request.url);
       }
-    }
-
-    return () => {
-      // Cancel in-flight prewarms when the effect re-runs (e.g. a new
-      // frame slid into the loop window). Completed fetches stay in
-      // the browser HTTP cache regardless.
-      for (const img of requested) img.src = "";
     };
-  }, [ready, showRadar, radarFrames]);
+  }, [ready, showRadar, prefetchNextFileKey, radarFileKey]);
 
   function applyToSource(
     collection: AlertFeatureCollection,
@@ -1090,6 +1076,37 @@ interface TileCoord {
   z: number;
   x: number;
   y: number;
+}
+
+interface TilePrefetchRequest {
+  done: boolean;
+  img: HTMLImageElement;
+  url: string;
+}
+
+function rememberPrefetchedTileUrl(cache: Set<string>, url: string): void {
+  cache.add(url);
+  while (cache.size > PREFETCHED_TILE_URL_LIMIT) {
+    const oldest = cache.values().next().value;
+    if (oldest === undefined) return;
+    cache.delete(oldest);
+  }
+}
+
+function prioritizedTileCoords(
+  coords: ReadonlyArray<TileCoord>,
+  maxTiles: number,
+): TileCoord[] {
+  if (coords.length <= maxTiles) return [...coords];
+  const centerX = coords.reduce((sum, coord) => sum + coord.x, 0) / coords.length;
+  const centerY = coords.reduce((sum, coord) => sum + coord.y, 0) / coords.length;
+  return [...coords]
+    .sort((a, b) => {
+      const aDist = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+      const bDist = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+      return aDist - bDist;
+    })
+    .slice(0, maxTiles);
 }
 
 /**

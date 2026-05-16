@@ -60,7 +60,7 @@ const LOOP_FRAME_DURATION_MS: Record<LoopSpeed, number> = {
   8: 200,
 };
 
-const DEFAULT_LOOP_SPEED: LoopSpeed = 2;
+const DEFAULT_LOOP_SPEED: LoopSpeed = 1;
 
 export default function MapPage() {
   const [collection, setCollection] = useState<AlertFeatureCollection | null>(null);
@@ -82,12 +82,11 @@ export default function MapPage() {
   );
   const [showRadar, setShowRadar] = useState(true);
 
-  // 1h radar auto-loop. Default-on so the page feels alive on first
-  // load: every grid in the last hour is played in sequence at 2×.
-  // Pauses automatically when the user scrubs the timeline; resumes
-  // via the explicit Play button. Loop is hidden entirely when there
-  // are fewer than 2 grids in the window.
-  const [loopPlaying, setLoopPlaying] = useState(true);
+  // 1h radar auto-loop. It starts paused because a full CONUS replay can
+  // touch hundreds of immutable tile URLs on the first pass. Users can
+  // opt into the animation with the Loop control; live mode still shows
+  // the freshest pinned grid immediately.
+  const [loopPlaying, setLoopPlaying] = useState(false);
   const [loopFrame, setLoopFrame] = useState(0);
   const [loopSpeed, setLoopSpeed] = useState<LoopSpeed>(DEFAULT_LOOP_SPEED);
 

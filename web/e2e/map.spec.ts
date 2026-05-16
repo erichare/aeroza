@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+const TRANSPARENT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 /**
  * `/map` smoke test.
  *
@@ -103,5 +108,71 @@ test.describe("/map", () => {
     // Either way the user knows the affordance exists.
     const loopButton = page.getByRole("button", { name: /loop 1h/i });
     await expect(loopButton).toBeVisible();
+  });
+
+  test("starts the radar loop paused and does not prewarm every frame", async ({
+    page,
+  }) => {
+    const tileUrls: string[] = [];
+    const now = Date.now();
+    const items = Array.from({ length: 30 }, (_, index) => {
+      const validAt = new Date(now - index * 2 * 60_000).toISOString();
+      return {
+        fileKey: `CONUS/MergedReflectivityComposite_00.50/20260516/MRMS_MergedReflectivityComposite_00.50_${index}.grib2.gz`,
+        product: "MergedReflectivityComposite",
+        level: "00.50",
+        validAt,
+        zarrUri: `/tmp/mrms-${index}.zarr`,
+        variable: "reflectivity",
+        dims: ["latitude", "longitude"],
+        shape: [3500, 7000],
+        dtype: "float32",
+        nbytes: 98_000_000,
+        materialisedAt: validAt,
+      };
+    });
+
+    await page.route("https://tiles.openfreemap.org/styles/positron", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        json: { version: 8, sources: {}, layers: [] },
+      }),
+    );
+    await page.route(/\/v1\/alerts(\?|$)/, (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        json: { type: "FeatureCollection", features: [] },
+      }),
+    );
+    await page.route(/\/v1\/mrms\/grids(\?|$)/, (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        json: { type: "MrmsGridList", items },
+      }),
+    );
+    await page.route(/\/v1\/mrms\/tiles\//, (route) => {
+      tileUrls.push(route.request().url());
+      return route.fulfill({
+        body: TRANSPARENT_PNG,
+        contentType: "image/png",
+      });
+    });
+
+    await page.goto("/map");
+
+    const loopButton = page.getByRole("button", { name: /loop 1h/i });
+    await expect(loopButton).toBeVisible();
+    await expect(loopButton).toHaveAttribute("aria-pressed", "false");
+    await expect(loopButton).toHaveText(/Loop 1h/);
+
+    await expect.poll(() => tileUrls.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    await page.waitForTimeout(1_000);
+
+    const requestedFileKeys = new Set(
+      tileUrls.map((url) => new URL(url).searchParams.get("fileKey") ?? "live"),
+    );
+
+    expect(requestedFileKeys.size).toBeLessThanOrEqual(2);
+    expect(tileUrls.length).toBeLessThan(120);
   });
 });
