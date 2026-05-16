@@ -1,6 +1,5 @@
 "use client";
 
-import Script from "next/script";
 import { useLayoutEffect } from "react";
 
 interface ScalarMountProps {
@@ -60,7 +59,14 @@ export function ScalarMount({
         data-url={specUrl}
         data-configuration={configJson}
       />
-      <Script src={bundleUrl} strategy="afterInteractive" />
+      {/* React 19 hoists ``<script async>`` to <head> and dedupes by src,
+          so this gives the same "load after hydration, run once" semantics
+          as next/script's ``strategy="afterInteractive"`` without depending
+          on next/script's type chain — which broke under next@15.5.18 +
+          npm workspaces hoisting (the ScriptHTMLAttributes import in
+          ``next/dist/client/script.d.ts`` resolved past @types/react and
+          stripped ``src`` from ScriptProps). */}
+      <script src={bundleUrl} async />
     </>
   );
 }
