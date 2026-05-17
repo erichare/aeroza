@@ -13,7 +13,8 @@ you already have Railway and Supabase accounts.
             │                │  ├─ ingest-alerts         │
             │   API calls    │  ├─ ingest-mrms           │
             └───────────────►│  ├─ materialise-mrms      │
-                             │  ├─ dispatch-webhooks     │
+                             │  ├─ prewarm-tiles ───────►│──► Cloudflare R2
+                             │  ├─ dispatch-webhooks     │    (tiles.aeroza.app)
                              │  └─ volume → /app/data    │
                              └──────────┬────────────────┘
                                         │ Postgres DSN
@@ -29,9 +30,20 @@ grids the API serves as raster tiles. Railway volumes can't be shared
 across services, so splitting the workers into their own services would
 break the radar replay.
 
-NATS is intentionally omitted — only the SSE alerts stream depends on
-it, and the demo UI doesn't need it. Add it later if you wire up
-streaming alerts.
+NATS is **required** in production now: the `prewarm` worker (see
+`Procfile.railway`) subscribes to `aeroza.mrms.grids.new` and renders
+the CONUS tile pyramid into Cloudflare R2 — without a reachable NATS
+service the worker connects but never receives an event, and
+`tiles.aeroza.app` 404s every tile until the on-demand FastAPI
+write-through catches up grid-by-grid. Deploy a `nats:2-alpine` Railway
+service and point `AEROZA_NATS_URL` at its internal hostname.
+
+Cloudflare R2 is **required** for the tile CDN. The `prewarm` worker
+uploads every rendered tile under `{file_key}/{z}/{x}/{y}.webp`, and
+the deployed dashboard fetches tiles from `https://tiles.aeroza.app`
+(a custom domain on the R2 bucket). Without the four R2 env vars the
+prewarm worker logs a one-shot warning and idles — no crash loop, but
+no tile prewarming either.
 
 ## What you'll create
 
@@ -87,20 +99,30 @@ Vercel hobby and Supabase free tier are $0.
    ```
    AEROZA_ENV=production
    AEROZA_DATABASE_URL=postgresql+asyncpg://postgres.PROJECT:PASSWORD@…
-   AEROZA_REDIS_URL=redis://stub-not-used   # see note below
-   AEROZA_NATS_URL=nats://stub-not-used     # see note below
+   AEROZA_REDIS_URL=redis://stub-not-used   # optional, see note below
+   AEROZA_NATS_URL=nats://${{nats.RAILWAY_PRIVATE_DOMAIN}}:4222
    AEROZA_API_KEY_SALT=GENERATE_ME_WITH_OPENSSL_RAND_BASE64_32
    AEROZA_CORS_ALLOW_ORIGINS=https://aeroza.vercel.app
    AEROZA_DATA_DIR=/app/data
+
+   # Cloudflare R2 — feeds the tile prewarm worker. All four required
+   # in production or tiles.aeroza.app stays empty. See section 5 below
+   # for how to provision the bucket + access keys.
+   AEROZA_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   AEROZA_R2_BUCKET=aeroza-tiles
+   AEROZA_R2_ACCESS_KEY_ID=…
+   AEROZA_R2_SECRET_ACCESS_KEY=…
+   AEROZA_R2_PUBLIC_BASE_URL=https://tiles.aeroza.app
    ```
    Generate the salt:
    ```bash
    openssl rand -base64 32
    ```
-   The Redis / NATS URLs can stay as stubs because the API has graceful
-   fallbacks for both. If you want SSE streaming, deploy a `redis:7-alpine`
-   and `nats:2-alpine` as separate Railway services and set the URLs to
-   their internal `${{redis.RAILWAY_PRIVATE_DOMAIN}}:6379` shapes.
+   The Redis URL can stay as a stub because the API has a graceful
+   fallback. NATS is required (the prewarm worker depends on it) —
+   deploy a `nats:2-alpine` Railway service and reference its internal
+   hostname above. If you also want SSE streaming, deploy `redis:7-alpine`
+   and swap the Redis stub for `redis://${{redis.RAILWAY_PRIVATE_DOMAIN}}:6379`.
 5. **Settings → Volumes** — add one volume mounted at `/app/data`. 5 GB
    is plenty for a few featured events; bump if you intend to keep many
    weeks of grids.
@@ -118,6 +140,35 @@ Vercel hobby and Supabase free tier are $0.
    ```
 8. Hit `https://aeroza-api-production.up.railway.app/health` — should
    return `{"status":"ok","version":"…"}`.
+
+## 2b. Cloudflare R2: provision the tile bucket
+
+The `prewarm` worker uploads every CONUS tile to a Cloudflare R2 bucket
+that the frontend reads via a custom domain. Without R2, every tile on
+`tiles.aeroza.app` returns 404.
+
+1. Cloudflare dashboard → **R2** → **Create bucket** → name it
+   `aeroza-tiles`. Region: `Automatic`.
+2. **Settings → Public access → Custom domain** → add
+   `tiles.aeroza.app` (or whatever subdomain you want). Cloudflare
+   provisions an HTTPS endpoint that fronts the bucket with their
+   global CDN. The frontend reads `tiles.aeroza.app/{fileKey}/{z}/{x}/{y}.webp`.
+3. **R2 → Manage R2 API Tokens → Create API token** →
+   `aeroza-tiles-writer`, permissions `Object Read & Write`, specify
+   `aeroza-tiles` as the only bucket. Save the four values it shows you:
+   - **Access Key ID** → `AEROZA_R2_ACCESS_KEY_ID`
+   - **Secret Access Key** → `AEROZA_R2_SECRET_ACCESS_KEY`
+   - **Endpoint** (`https://<account>.r2.cloudflarestorage.com`) →
+     `AEROZA_R2_ENDPOINT`
+   - Bucket name (`aeroza-tiles`) → `AEROZA_R2_BUCKET`
+4. Drop them into the Railway service Variables panel (see step 2.4
+   above), redeploy, and check the prewarm worker logs for
+   `tiles.prewarm.consumer.start … target=r2`. The first new MRMS grid
+   after that should populate ≈680 tiles in R2 within ~30 seconds.
+
+Backfill seed (after first deploy): see `scripts/backfill-prewarm.py`
+— a one-shot script that walks the pyramid for the N most-recent
+fileKeys so the CDN is hot the moment the frontend starts polling.
 
 ## 3. Vercel: point the web frontend at the Railway API
 
@@ -167,8 +218,11 @@ depending on how many MRMS files NOAA's bucket holds for that window.
 - **Cost ceiling**: enable Railway's monthly spend limit. With the
   volume + always-on workers you'll burn ~$10-20/mo on Hobby.
 - **Logs**: Railway logs are prefixed by honcho process name
-  (`api.1`, `alerts.1`, `mrms.1`, `materialise.1`, `webhooks.1`). Use
-  the search box in the Railway log UI to scope.
+  (`api.1`, `alerts.1`, `mrms.1`, `materialise.1`, `prewarm.1`,
+  `webhooks.1`). Use the search box in the Railway log UI to scope.
+  For tile 404 debugging, filter on `prewarm` and look for
+  `tiles.prewarm.consumer.event_done` — the `rendered` / `skipped_existing`
+  counts tell you whether R2 is being populated per grid.
 - **Updates**: pushing to `main` triggers a Railway redeploy
   automatically (Railway's GitHub integration is wired by default).
   Migrations run before the new image takes traffic.

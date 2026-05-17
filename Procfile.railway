@@ -5,6 +5,16 @@
 #   alerts       NWS alerts poller — feeds the alert polygons / SSE stream
 #   mrms         MRMS file-catalog poller — pulls grib2 manifests from NOAA S3
 #   materialise  GRIB → Zarr writer — what makes the radar tiles render
+#   prewarm      tile-pyramid pre-renderer — listens on aeroza.mrms.grids.new
+#                and uploads the full CONUS z=2..8 pyramid to Cloudflare R2
+#                (≈680 tiles per grid). Without this, tiles.aeroza.app 404s
+#                until the on-demand FastAPI write-through catches up grid
+#                by grid — too slow for the radar loop. Needs the four
+#                ``AEROZA_R2_*`` env vars + ``AEROZA_NATS_URL`` pointed at
+#                a reachable NATS service to function. Without R2 creds the
+#                process warns once and idles (no crash-loop), letting the
+#                operator finish wiring secrets without burning Railway
+#                deploy budget.
 #   nowcast      pysteps persistence forecaster — issues forecasts on every grid
 #   verify       scores already-issued forecasts against just-arrived obs;
 #                this is what populates the public calibration / "moat" panel
@@ -31,6 +41,7 @@ api:        uvicorn aeroza.main:app --host 0.0.0.0 --port ${PORT:-8000}
 alerts:     aeroza-ingest-alerts
 mrms:       aeroza-ingest-mrms
 materialise: aeroza-materialise-mrms --target-root ${AEROZA_DATA_DIR:-/app/data}/mrms
+prewarm:    aeroza-prewarm-tiles
 nowcast:    aeroza-nowcast-mrms --algorithm persistence
 verify:     aeroza-verify-nowcasts
 webhooks:   aeroza-dispatch-webhooks

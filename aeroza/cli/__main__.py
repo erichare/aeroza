@@ -17,6 +17,7 @@ from aeroza.cli import (
     ingest_mrms,
     materialise_mrms,
     nowcast_mrms,
+    prewarm_tiles,
     prune_mrms,
     verify_nowcasts,
 )
@@ -29,6 +30,7 @@ SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
     "verify-nowcasts": verify_nowcasts.main,
     "dispatch-webhooks": dispatch_webhooks.main,
     "prune-mrms": prune_mrms.main,
+    "prewarm-tiles": prewarm_tiles.main,
 }
 
 
