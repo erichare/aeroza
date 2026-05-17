@@ -1,5 +1,5 @@
 /**
- * Curated catalog of major US weather events for the /demo Storm Replay
+ * Curated catalog of major US weather events for the /replay Storm Replay
  * page. Each entry is hand-written commentary plus the metadata needed
  * to drive the radar replay (time window, bbox).
  *
@@ -57,7 +57,7 @@ export interface FeaturedEvent {
   replayable: boolean;
   /**
    * NWS Weather Forecast Office 3-letter codes that cover the event's
-   * bbox. Used by /demo to query the IEM historical-warnings archive
+   * bbox. Used by /replay to query the IEM historical-warnings archive
    * (`GET /v1/alerts/historical?wfos=...`). Pick the WFOs whose CWA
    * (county warning area) overlaps the bbox — IEM filters strictly by
    * issuing office, so missing one means missing every warning that
