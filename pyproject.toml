@@ -76,6 +76,7 @@ aeroza-nowcast-mrms = "aeroza.cli.nowcast_mrms:main"
 aeroza-verify-nowcasts = "aeroza.cli.verify_nowcasts:main"
 aeroza-dispatch-webhooks = "aeroza.cli.dispatch_webhooks:main"
 aeroza-prune-mrms = "aeroza.cli.prune_mrms:main"
+aeroza-prewarm-tiles = "aeroza.cli.prewarm_tiles:main"
 aeroza-api-keys = "aeroza.cli.api_keys:main"
 
 [dependency-groups]
