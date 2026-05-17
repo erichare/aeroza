@@ -140,9 +140,7 @@ async def test_run_falls_back_to_lru_when_r2_missing(
     monkeypatch.setattr(prewarm_tiles, "_drive", fake_drive)
 
     args = prewarm_tiles.build_parser().parse_args([])
-    settings = type(
-        "S", (), {"env": "test", "nats_url": "nats://x", "r2_endpoint": None}
-    )()
+    settings = type("S", (), {"env": "test", "nats_url": "nats://x", "r2_endpoint": None})()
     rc = await prewarm_tiles._run(args=args, settings=settings)
     assert rc == 0
     assert captured["kwargs"]["r2_client"] is None

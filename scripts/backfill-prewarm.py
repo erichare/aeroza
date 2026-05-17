@@ -80,9 +80,7 @@ def conus_tile_coords(zoom: int) -> tuple[tuple[int, int], ...]:
     y_min = max(0, min(n - 1, lat_to_y(lat_n)))
     y_max = max(0, min(n - 1, lat_to_y(lat_s)))
 
-    return tuple(
-        (x, y) for x in range(x_min, x_max + 1) for y in range(y_min, y_max + 1)
-    )
+    return tuple((x, y) for x in range(x_min, x_max + 1) for y in range(y_min, y_max + 1))
 
 
 async def list_recent_file_keys(
