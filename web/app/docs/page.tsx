@@ -38,7 +38,7 @@ export default function DocsIndexPage() {
           requests.
         </li>
         <li>
-          <Link href="/demo">Storm Replay</Link> — narrated walkthroughs of
+          <Link href="/replay">Storm Replay</Link> — narrated walkthroughs of
           curated historical events (April 27 2011 outbreak, etc.) showing
           alerts and radar evolving together. Best way to see the data model
           in motion before wiring up your own client.

@@ -172,7 +172,7 @@ interface AlertsMapProps {
    * Pin the radar layer to a specific MRMS grid by its source file key.
    * When set, the tile URL gets `?fileKey=...` appended and the cache-bust
    * refresh tick is suppressed (the radar is no longer "live"). Used by
-   * /demo to scrub the radar through historical grids.
+   * /replay to scrub the radar through historical grids.
    */
   radarFileKey?: string | null;
   /**
@@ -222,7 +222,7 @@ interface AlertsMapProps {
    *
    * Pass the auto-loop's full grid set here. Omit (or pass empty) to
    * stay on the legacy single-source code path — that path is fine
-   * for static views like the home hero and the /demo replay scrubber
+   * for static views like the home hero and the /replay scrubber
    * where the URL changes rarely.
    *
    * ``| undefined`` is explicit so the loop's
@@ -232,7 +232,7 @@ interface AlertsMapProps {
   radarFrames?: ReadonlyArray<{ fileKey: string }> | undefined;
   /**
    * Caller-supplied alert collection. When set, the map renders these
-   * features instead of polling ``/v1/alerts``. Used by /demo to show
+   * features instead of polling ``/v1/alerts``. Used by /replay to show
    * the historical NWS warnings that were in force during a featured
    * event — the live `/v1/alerts` endpoint only carries currently-active
    * alerts and would always be empty for past windows.
@@ -381,7 +381,7 @@ export function AlertsMap({
             // Fade duration is a function of mode. In live mode (no
             // radarFileKey) we fade quickly because each tile-URL swap is a
             // refresh, not a logical step in time. In pinned mode (the
-            // /demo replay) we fade much longer so the eye reads
+            // /replay scrubber) we fade much longer so the eye reads
             // consecutive frames as continuous motion rather than discrete
             // jumps. 700ms was chosen against the 800ms-hold of the slowest
             // playback speed — the fade fits within the hold but only
@@ -677,7 +677,7 @@ export function AlertsMap({
   //   with a fresh cache-buster so MapLibre re-fetches and the user sees
   //   newer grids land as they materialise.
   // - "Pinned" mode (radarFileKey set): swap the tile URL whenever the
-  //   prop changes. Used by /demo's autoplay scrubber to step the radar
+  //   prop changes. Used by /replay's autoplay scrubber to step the radar
   //   through historical grids one fileKey at a time. No interval timer
   //   in this mode — a refresh would just re-fetch the same image.
   //

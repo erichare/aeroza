@@ -129,7 +129,7 @@ Vercel hobby and Supabase free tier are $0.
 
 ## 4. Seed a few featured events so visitors see content
 
-Without seeding, `/demo` shows "no grids in this window" until the
+Without seeding, `/replay` shows "no grids in this window" until the
 ingest worker pulls live MRMS — which only covers the last few hours.
 Featured events from 2021–2024 require manual backfill:
 
@@ -156,7 +156,7 @@ depending on how many MRMS files NOAA's bucket holds for that window.
   from the API (no "Live numbers unavailable" banner).
 - `https://aeroza.vercel.app/map` — radar tiles paint (fresh CONUS
   reflectivity from the live ingest).
-- `https://aeroza.vercel.app/demo` — pick "Houston Derecho", radar
+- `https://aeroza.vercel.app/replay` — pick "Houston Derecho", radar
   + amber alert polygons render in sync as the scrubber advances.
 
 ## Operational notes

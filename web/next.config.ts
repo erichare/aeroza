@@ -27,6 +27,18 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_AEROZA_TILES_URL:
       process.env.NEXT_PUBLIC_AEROZA_TILES_URL ?? "",
   },
+  // /demo → /replay: the Storm Replay route was renamed to match its
+  // label and product name. Permanent redirect so external links
+  // (README, deploy guides, blog posts) keep resolving.
+  async redirects() {
+    return [
+      {
+        source: "/demo",
+        destination: "/replay",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -51,7 +51,7 @@ const LOOP_WINDOW_MS = 60 * 60 * 1000;
 type LoopSpeed = 1 | 2 | 4 | 8;
 const LOOP_SPEEDS: ReadonlyArray<LoopSpeed> = [1, 2, 4, 8];
 
-// Frame cadence per speed multiplier — same numbers /demo's Storm
+// Frame cadence per speed multiplier — same numbers /replay's Storm
 // Replay uses, so muscle memory transfers between the two pages.
 const LOOP_FRAME_DURATION_MS: Record<LoopSpeed, number> = {
   1: 1500,

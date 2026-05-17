@@ -64,7 +64,7 @@ type Mode =
   | { kind: "event"; event: FeaturedEvent };
 
 /**
- * `/demo` — "Storm Replay". Two modes, one chrome:
+ * `/replay` — "Storm Replay". Two modes, one chrome:
  *
  * 1. **Live archive** (default). Replays the most recent N grids from
  *    your local /v1/mrms/grids catalog. Always works on any healthy
