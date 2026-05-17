@@ -40,14 +40,27 @@ const RADAR_FRAME_LAYER_PREFIX = "mrms-radar-frame-layer:";
 // (200 ms) — anything longer would have the previous frame still
 // fading out as the next one tried to fade in, which reads as ghosting.
 const RADAR_FRAME_FADE_MS = 180;
-// Highest zoom level the tile origin actually serves. R2 holds
-// z=2..8 — beyond that we let MapLibre's GPU overzoom take over
-// (z=8 is already at MRMS's ~1km native cell size, so anything
-// finer is interpolation regardless). The legacy FastAPI fallback
-// route serves up to z=10 but at this resolution there's no
-// signal-quality difference, and the lower cap cuts our R2 write
-// + storage footprint by ~16x compared to z=10.
-const RADAR_MAX_ZOOM = 8;
+// Highest zoom level the radar source asks MapLibre to fetch for.
+// MRMS native cell size is ~1km so the *data* doesn't carry new
+// signal past z=8, but two cosmetic levers do measurably improve
+// the high-zoom look:
+//
+//   1. Server-side Gaussian smoothing (``aeroza/tiles/raster.py``)
+//      softens cell boundaries at every zoom — the storm's edge
+//      looks like a gradient instead of a stair-step.
+//   2. Fetching z=9/z=10 tiles directly instead of letting MapLibre
+//      GPU-stretch a z=8 tile gives bilinear-from-source pixels
+//      rather than bilinear-of-rasterised-bitmap pixels — visibly
+//      cleaner gradients at deep zoom.
+//
+// The R2 prewarm still only fills z=2..8 by default (storage cost
+// math: z=9 is 4x more tiles than z=8, z=10 is 16x — punting these
+// to the on-demand write-through path bounds the bucket footprint
+// by user behaviour, not total coverage). Bypass-cache on
+// tiles.aeroza.app means a fresh-fileKey + first deep-zoom user
+// gets a few seconds of 404→write-through→200 churn; subsequent
+// requests are R2 hits forever.
+const RADAR_MAX_ZOOM = 10;
 // Only prefetch a small center-biased subset of the next frame. MapLibre
 // will still request every visible tile once the frame becomes visible;
 // this lookahead is just a latency hint, not a second full tile loader.

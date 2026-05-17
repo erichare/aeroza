@@ -62,11 +62,15 @@ log = structlog.get_logger(__name__)
 CONUS_BBOX: Final[tuple[float, float, float, float]] = (-125.0, 24.0, -66.0, 50.0)
 
 # Zoom levels to prewarm. ``z=2..8`` covers the page's fit-bounds
-# camera (z=4 on first paint) plus every zoom-in step a user can
-# reach before MRMS's 1 km cell size starts oversampling (z=8 is the
-# practical resolution ceiling). MapLibre overzooms z=8 GPU-side at
-# z=9-10 so the user can keep zooming without us paying the upload
-# cost for visibly-identical bytes.
+# camera (z=4 on first paint) plus every zoom-in step where the
+# upload cost is bounded. z=9 quadruples the tile count and z=10
+# quadruples it again, so we explicitly *don't* prewarm those —
+# users who zoom past 8 trigger the on-demand write-through path
+# instead, which bounds total R2 footprint by viewer behaviour
+# rather than total CONUS coverage. MapLibre's ``maxzoom: 10`` lets
+# it ask for those z=9/z=10 tiles directly (rather than GPU-stretch
+# a z=8 tile), and the bypass-cache rule on tiles.aeroza.app means
+# the brief 404→write-through churn resolves on the next request.
 #
 # Tile count for the CONUS bbox: roughly {z=2: 4, z=3: 8, z=4: 24,
 # z=5: 80, z=6: 256, z=7: 800, z=8: 2500} → ~3.7k tiles when computed
