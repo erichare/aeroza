@@ -7,7 +7,7 @@ import maplibregl, {
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type AlertFeature,
@@ -304,6 +304,26 @@ export function AlertsMap({
   const prefetchedTileUrlsRef = useRef<Set<string>>(new Set());
   const prefetchInFlightUrlsRef = useRef<Set<string>>(new Set());
 
+  // Effective frame set the multi-source machinery operates over.
+  //
+  // The parent's ``radarFrames`` wins (the loop on /map passes the
+  // full window). When it's absent but ``radarFileKey`` is pinned,
+  // we synthesise a single-element frame list so live-mode pin
+  // *also* goes through the per-source code path. This is the fix
+  // for "tiles disappear when MRMS publishes a new grid":
+  // ``setTiles()`` calls ``SourceCache.reload()`` which resets the
+  // source's tile cache, blanking the radar layer until the new
+  // tiles re-fetch (~30-50s for a CONUS-scale viewport). Adding a
+  // new source per fileKey lets the previous frame stay painted
+  // until the new one is ready.
+  const effectiveFrames = useMemo<
+    ReadonlyArray<{ fileKey: string }> | undefined
+  >(() => {
+    if (radarFrames && radarFrames.length > 0) return radarFrames;
+    if (radarFileKey !== null) return [{ fileKey: radarFileKey }];
+    return undefined;
+  }, [radarFrames, radarFileKey]);
+
   // Build the map exactly once. Strict mode's mount→cleanup→remount within
   // the same tick wrecks MapLibre's WebGL context, so we defer the actual
   // construction to a microtask — by the time it runs, the strict-mode
@@ -367,7 +387,16 @@ export function AlertsMap({
           id: RADAR_LAYER_ID,
           type: "raster",
           source: RADAR_SOURCE_ID,
-          layout: { visibility: showRadar ? "visible" : "none" },
+          // Only visible at create time when there's no pinned fileKey
+          // — pinned mode is now handled by per-frame sources (see
+          // ``effectiveFrames``), and the layer-toggle effect will
+          // keep this layer hidden whenever those are in play.
+          // Avoids a cold-start flash where the legacy source's tiles
+          // would briefly appear before the frame source took over.
+          layout: {
+            visibility:
+              showRadar && radarFileKey === null ? "visible" : "none",
+          },
           paint: {
             // Slightly more transparent than before so the new state-border
             // layer reads through light precip without losing the storm's
@@ -621,9 +650,9 @@ export function AlertsMap({
   useEffect(() => {
     if (!ready || !mapRef.current) return;
     const map = mapRef.current;
-    const framesActive = (radarFrames?.length ?? 0) > 0;
+    const framesActive = (effectiveFrames?.length ?? 0) > 0;
     setLayerVisibility(map, RADAR_LAYER_ID, showRadar && !framesActive);
-  }, [ready, showRadar, radarFrames]);
+  }, [ready, showRadar, effectiveFrames]);
 
   // Surface the radar source's tile-load state to the parent. The /map
   // auto-loop uses it to skip a frame when the previous frame's tiles
@@ -671,22 +700,20 @@ export function AlertsMap({
     };
   }, [ready, onRadarLoadingChange]);
 
-  // Radar tile URL management — legacy single-source path.
+  // Legacy single-source live mode — only reachable when ``TILES_BASE``
+  // is unset and no fileKey has resolved yet (cold load before
+  // /v1/mrms/latest comes back, or local dev without R2). Periodically
+  // swap the cache-bust query so MapLibre re-fetches the live endpoint
+  // and the user sees fresh grids as they materialise.
   //
-  // - "Live" mode (radarFileKey === null): periodically swap the tile URL
-  //   with a fresh cache-buster so MapLibre re-fetches and the user sees
-  //   newer grids land as they materialise.
-  // - "Pinned" mode (radarFileKey set): swap the tile URL whenever the
-  //   prop changes. Used by /replay's autoplay scrubber to step the radar
-  //   through historical grids one fileKey at a time. No interval timer
-  //   in this mode — a refresh would just re-fetch the same image.
-  //
-  // Skipped entirely when ``radarFrames`` puts the component in
-  // multi-source mode — the frames-mode effects below own URL
-  // management for that path.
+  // Skipped entirely when ``effectiveFrames`` is active — pinned and
+  // loop modes both go through the multi-source path below, which
+  // avoids the ``setTiles()`` cache-reset that would otherwise blank
+  // the radar for ~30-50s on every grid swap.
   useEffect(() => {
     if (!ready || !showRadar) return;
-    if ((radarFrames?.length ?? 0) > 0) return;
+    if ((effectiveFrames?.length ?? 0) > 0) return;
+    if (radarFileKey !== null) return;
     const swap = () => {
       const map = mapRef.current;
       if (!map) return;
@@ -698,23 +725,21 @@ export function AlertsMap({
       // raster sources but the static .d.ts types it as part of an
       // internal interface only.
       (source as unknown as { setTiles?: (tiles: string[]) => void }).setTiles?.(
-        [buildRadarTileUrl(radarFileKey)],
+        [buildRadarTileUrl(null)],
       );
     };
     swap();
-    if (radarFileKey !== null) {
-      // Pinned: nothing to refresh; swap once and stop.
-      return;
-    }
     const id = setInterval(swap, RADAR_REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [ready, showRadar, radarFileKey, radarFrames]);
+  }, [ready, showRadar, radarFileKey, effectiveFrames]);
 
   // Multi-source mode: reconcile per-frame radar sources/layers with
-  // the ``radarFrames`` prop. Each fileKey gets its own MapLibre
-  // raster source so MapLibre's per-source tile cache survives across
-  // loop iterations — the architectural fix for the "iter 1 sharp,
-  // iter 2 blurry" symptom (see prop docstring).
+  // ``effectiveFrames``. Each fileKey gets its own MapLibre raster
+  // source so MapLibre's per-source tile cache survives across loop
+  // iterations and live-mode pin swaps — the architectural fix for
+  // both the "iter 1 sharp, iter 2 blurry" loop symptom and the
+  // "tiles disappear when MRMS publishes a new grid" live symptom
+  // (see ``effectiveFrames`` docstring).
   //
   // Sources stay invisible (``visibility: none``) until the active
   // frame matches; the visibility-toggle effect below picks the
@@ -722,11 +747,18 @@ export function AlertsMap({
   // *not* to fetch tiles for invisible sources, so adding 19 sources
   // up front doesn't fan out into 19× the initial bandwidth — each
   // source only fetches when the loop reaches its frame.
+  //
+  // Teardown is guarded against the currently-visible frame: when
+  // ``effectiveFrames`` shrinks and the previously-visible key drops
+  // out (e.g. live mode swapping from A to [B]), we keep A's source
+  // alive so the visibility effect can cross-fade through it. The
+  // idle handler in that effect actually removes A once tiles for
+  // B are painted.
   useEffect(() => {
     if (!ready || !mapRef.current) return;
     const map = mapRef.current;
     const beforeLabels = firstSymbolLayerId(map);
-    const desired = new Set((radarFrames ?? []).map((f) => f.fileKey));
+    const desired = new Set((effectiveFrames ?? []).map((f) => f.fileKey));
     const existing = frameSourceKeysRef.current;
 
     for (const fileKey of desired) {
@@ -764,28 +796,39 @@ export function AlertsMap({
       existing.add(fileKey);
     }
 
-    // Tear down sources for fileKeys that dropped out of the loop
-    // window (e.g. the rolling 1h cutoff slid past them). Without
-    // cleanup, a long-running tab would accumulate sources forever.
+    // Tear down sources for fileKeys that dropped out of the active
+    // window — but preserve ``visibleFrameKeyRef.current`` so the
+    // cross-fade in the visibility effect has something to fade from.
+    // The visibility effect drops the previous source once tiles for
+    // the new target are painted; without this guard, a live-mode
+    // ``radarFileKey`` change from A → B would tear down A here
+    // before B's tiles arrive, reintroducing the blank-radar gap.
+    const visibleKey = visibleFrameKeyRef.current;
     for (const fileKey of [...existing]) {
       if (desired.has(fileKey)) continue;
+      if (fileKey === visibleKey) continue;
       const sourceId = frameSourceId(fileKey);
       const layerId = frameLayerId(fileKey);
       if (map.getLayer(layerId)) map.removeLayer(layerId);
       if (map.getSource(sourceId)) map.removeSource(sourceId);
       existing.delete(fileKey);
     }
-  }, [ready, radarFrames]);
+  }, [ready, effectiveFrames]);
 
   // Frame visibility. In multi-source mode we reveal the target frame
   // immediately, but keep the previous frame visible until MapLibre
   // reaches idle. That makes swaps additive while tiles are in flight:
   // the new frame paints over the old one as it arrives instead of
   // blanking the radar layer first.
+  //
+  // After idle, the previous frame is hidden — and if it's no longer
+  // in ``effectiveFrames`` (live-mode pin swap, not loop), its
+  // source/layer is removed entirely so we don't accumulate stale
+  // radar sources over time.
   useEffect(() => {
     if (!ready || !mapRef.current) return;
     const map = mapRef.current;
-    const framesActive = (radarFrames?.length ?? 0) > 0;
+    const framesActive = (effectiveFrames?.length ?? 0) > 0;
 
     const hideAllFrameLayers = () => {
       for (const fileKey of frameSourceKeysRef.current) {
@@ -811,20 +854,64 @@ export function AlertsMap({
 
     visibleFrameKeyRef.current = targetKey;
 
+    const dropStaleSource = (fileKey: string): void => {
+      const sourceId = frameSourceId(fileKey);
+      const layerId = frameLayerId(fileKey);
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      frameSourceKeysRef.current.delete(fileKey);
+    };
+
     const hideStaleFrames = () => {
       for (const fileKey of frameSourceKeysRef.current) {
         setLayerVisibility(map, frameLayerId(fileKey), fileKey === targetKey);
       }
+      // Reconciliation guards ``previousKey`` from teardown so the
+      // cross-fade has something to paint. Now that the new tiles
+      // are live, drop it — unless it's still part of the active
+      // frame set (loop mode keeps the window's frames alive
+      // intentionally so wrap-around is instant).
+      if (previousKey && previousKey !== targetKey) {
+        const desired = new Set(
+          (effectiveFrames ?? []).map((f) => f.fileKey),
+        );
+        if (!desired.has(previousKey)) dropStaleSource(previousKey);
+      }
     };
 
-    if (previousKey && previousKey !== targetKey && !map.areTilesLoaded()) {
-      map.once("idle", hideStaleFrames);
+    if (previousKey && previousKey !== targetKey) {
+      // Defer to ``idle`` unconditionally. Checking ``areTilesLoaded``
+      // here is racy: ``setLayerVisibility`` above just queued a
+      // redraw, but MapLibre hasn't yet kicked off tile fetches for
+      // the newly-revealed source — ``areTilesLoaded`` returns true
+      // (nothing in flight) and we'd tear the previous frame down
+      // before the new one is painted, reintroducing the blank-radar
+      // gap this whole multi-source path was designed to avoid. The
+      // visibility toggle itself transitions the map out of idle, so
+      // the next ``idle`` is guaranteed to fire after the new tiles
+      // land (or immediately if everything is cached).
+      //
+      // Backstop timeout: if a fade-targeted source 404s for every
+      // tile (e.g. R2 prewarm hasn't caught up yet — see PR #97),
+      // MapLibre can stay in a perpetually-dirty state and never
+      // fire ``idle``. The timeout bounds how long we keep the
+      // previous frame visible — 4× the fade duration so the
+      // cross-fade still completes naturally on the happy path.
+      let done = false;
+      const wrapped = (): void => {
+        if (done) return;
+        done = true;
+        hideStaleFrames();
+      };
+      map.once("idle", wrapped);
+      const timer = window.setTimeout(wrapped, RADAR_FRAME_FADE_MS * 4);
       return () => {
-        map.off("idle", hideStaleFrames);
+        map.off("idle", wrapped);
+        window.clearTimeout(timer);
       };
     }
     hideStaleFrames();
-  }, [ready, radarFileKey, showRadar, radarFrames]);
+  }, [ready, radarFileKey, showRadar, effectiveFrames]);
 
   // Prefetch a bounded center-biased subset of the next loop frame's
   // tiles. This is intentionally modest: MapLibre remains the only
