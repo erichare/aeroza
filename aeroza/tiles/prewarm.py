@@ -53,7 +53,7 @@ from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.stream.subscriber import MrmsGridSubscriber
 from aeroza.tiles.cache import CacheKey, TilePngCache
 from aeroza.tiles.r2 import R2Client
-from aeroza.tiles.raster import TileFormat, render_tile_image
+from aeroza.tiles.raster import TileFormat, load_grid, render_tile_from_loaded_grid
 from aeroza.tiles.render_pool import get_render_semaphore
 
 log = structlog.get_logger(__name__)
@@ -170,6 +170,25 @@ async def prewarm_tiles_for_grid(
     no-op.
     """
     semaphore = get_render_semaphore()
+    zooms = tuple(zooms)
+    formats = tuple(formats)
+
+    # Load the grid into memory once and render every tile from it. The
+    # per-tile alternative (``render_tile_image`` re-opening the Zarr store
+    # each call) makes a full CONUS pyramid ~1500 store-opens — tens of
+    # minutes on the prod box, far over the ~2-min grid cadence, so the CDN
+    # could never catch up. One load + in-memory slice drops that to seconds.
+    # A load failure (bad/absent store) fails the whole grid at once.
+    try:
+        grid = await asyncio.to_thread(load_grid, locator.zarr_uri, locator.variable)
+    except Exception as exc:
+        total = sum(len(conus_tile_coords(z)) for z in zooms) * len(formats)
+        log.warning(
+            "tiles.prewarm.grid_load_failed",
+            file_key=locator.file_key,
+            error=str(exc),
+        )
+        return PrewarmStats(rendered=0, failed=total, skipped_existing=0)
 
     rendered = 0
     failed = 0
@@ -197,9 +216,8 @@ async def prewarm_tiles_for_grid(
                 try:
                     async with semaphore:
                         body = await asyncio.to_thread(
-                            render_tile_image,
-                            zarr_uri=locator.zarr_uri,
-                            variable=locator.variable,
+                            render_tile_from_loaded_grid,
+                            grid,
                             z=zoom,
                             x=x,
                             y=y,

@@ -407,10 +407,10 @@ async def test_consumer_coalesces_grids_arriving_during_render(
 
     first_render_entered = threading.Event()
     release_first_render = threading.Event()
-    real_render = prewarm_module.render_tile_image
+    real_render = prewarm_module.render_tile_from_loaded_grid
     calls = {"n": 0}
 
-    def gated_render(**kwargs: object) -> bytes:
+    def gated_render(grid: object, **kwargs: object) -> bytes:
         # Hold the very first tile render in-flight so B and C pile up
         # behind grid A and the mailbox has to conflate them.
         calls["n"] += 1
@@ -418,9 +418,9 @@ async def test_consumer_coalesces_grids_arriving_during_render(
             first_render_entered.set()
             if not release_first_render.wait(timeout=5.0):
                 raise AssertionError("render gate was never released")
-        return real_render(**kwargs)  # type: ignore[arg-type]
+        return real_render(grid, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(prewarm_module, "render_tile_image", gated_render)
+    monkeypatch.setattr(prewarm_module, "render_tile_from_loaded_grid", gated_render)
 
     loop = asyncio.get_running_loop()
     target = len(conus_tile_coords(4))
