@@ -17,7 +17,9 @@ means the dev console can render either with one component.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, Literal
@@ -205,6 +207,46 @@ async def find_latest_mrms_grid(
     if row is None:
         return None
     return _row_to_view(row)
+
+
+# In-process TTL cache for the latest grid per (product, level). The on-demand
+# tile route and ``/v1/mrms/latest`` call this on *every* request, but the
+# latest grid only changes every ~2 minutes — so a few-second cache removes the
+# per-request DB query that was checking out a pooled connection per tile and
+# exhausting the connection pooler under bursts (EMAXCONNSESSION). A per-key
+# lock collapses a concurrent miss-storm into a single query.
+_LATEST_CACHE_TTL_SECONDS: Final[float] = 8.0
+_latest_grid_cache: dict[tuple[str, str], tuple[float, MrmsGridView | None]] = {}
+_latest_grid_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+async def find_latest_mrms_grid_cached(
+    session: AsyncSession,
+    *,
+    product: str,
+    level: str,
+    ttl_seconds: float = _LATEST_CACHE_TTL_SECONDS,
+) -> MrmsGridView | None:
+    """:func:`find_latest_mrms_grid` with a short in-process TTL cache.
+
+    The result is shared across all callers for the TTL window, so a burst of
+    tile requests issues at most one DB query per (product, level) rather than
+    one per request. Falls through to a fresh query on miss/expiry.
+    """
+    key = (product, level)
+    cached = _latest_grid_cache.get(key)
+    if cached is not None and (time.monotonic() - cached[0]) < ttl_seconds:
+        return cached[1]
+
+    lock = _latest_grid_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        # Re-check under the lock — a concurrent waiter may have just filled it.
+        cached = _latest_grid_cache.get(key)
+        if cached is not None and (time.monotonic() - cached[0]) < ttl_seconds:
+            return cached[1]
+        grid = await find_latest_mrms_grid(session, product=product, level=level)
+        _latest_grid_cache[key] = (time.monotonic(), grid)
+        return grid
 
 
 def _row_to_view(row: Any) -> MrmsGridView:

@@ -91,3 +91,33 @@ class TestViewToItem:
         assert wire["nbytes"] == 3500 * 7000 * 4
         assert wire["product"] == "MergedReflectivityComposite"
         assert wire["level"] == "00.50"
+
+
+async def test_find_latest_grid_cached_collapses_repeat_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cached lookup must hit the DB once per TTL window — that's what
+    keeps a tile burst from checking out a pooled connection per request."""
+    from aeroza.query import mrms_grids
+
+    calls = {"n": 0}
+
+    async def fake_find_latest(
+        session: object, *, product: str, level: str, at_or_before: object = None
+    ) -> MrmsGridView:
+        calls["n"] += 1
+        return _view(product=product, level=level)
+
+    monkeypatch.setattr(mrms_grids, "find_latest_mrms_grid", fake_find_latest)
+    mrms_grids._latest_grid_cache.clear()
+    try:
+        first = await mrms_grids.find_latest_mrms_grid_cached(None, product="P", level="L")  # type: ignore[arg-type]
+        second = await mrms_grids.find_latest_mrms_grid_cached(None, product="P", level="L")  # type: ignore[arg-type]
+        assert calls["n"] == 1  # second served from cache
+        assert first is second  # same cached object
+
+        # An expired TTL forces a fresh query.
+        await mrms_grids.find_latest_mrms_grid_cached(None, product="P", level="L", ttl_seconds=0)  # type: ignore[arg-type]
+        assert calls["n"] == 2
+    finally:
+        mrms_grids._latest_grid_cache.clear()
