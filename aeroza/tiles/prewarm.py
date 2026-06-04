@@ -6,7 +6,7 @@ API process and dies on every restart, the coverage stopped at z=6 so
 real user zoom-ins fell back to on-demand renders, and "warm one
 process's LRU" doesn't help when the API has multiple replicas.
 
-Current shape: render the full pyramid (``z=2..8``) over the CONUS
+Current shape: render the pyramid (``z=2..6``) over the CONUS
 bbox and **upload every tile to Cloudflare R2** under the deterministic
 key ``{file_key}/{z}/{x}/{y}.{webp|png}``. The frontend points
 ``tiles.aeroza.app`` at that bucket via a Cloudflare custom domain;
@@ -24,7 +24,7 @@ keeps ``make dev`` viable without a Cloudflare account.
 Strategy:
 
 * Listen for ``aeroza.mrms.grids.new`` events on NATS.
-* For each event, render every CONUS tile coord in ``z=2..8`` (~680
+* For each event, render every CONUS tile coord in ``z=2..6`` (~126
   tiles per grid). Re-use the shared render semaphore so prewarm
   cannot starve any live request handling that still hits the
   fallback route.
@@ -63,22 +63,21 @@ log = structlog.get_logger(__name__)
 # covers exactly the viewport every cold visitor lands on.
 CONUS_BBOX: Final[tuple[float, float, float, float]] = (-125.0, 24.0, -66.0, 50.0)
 
-# Zoom levels to prewarm. ``z=2..8`` covers the page's fit-bounds
-# camera (z=4 on first paint) plus every zoom-in step where the
-# upload cost is bounded. z=9 quadruples the tile count and z=10
-# quadruples it again, so we explicitly *don't* prewarm those —
-# users who zoom past 8 trigger the on-demand write-through path
-# instead, which bounds total R2 footprint by viewer behaviour
-# rather than total CONUS coverage. MapLibre's ``maxzoom: 10`` lets
-# it ask for those z=9/z=10 tiles directly (rather than GPU-stretch
-# a z=8 tile), and the bypass-cache rule on tiles.aeroza.app means
-# the brief 404→write-through churn resolves on the next request.
+# Zoom levels to prewarm. ``z=2..6`` covers the page's fit-bounds camera
+# (z=4 on first paint) through metro-level zoom. We deliberately stop at
+# z=6 for throughput: across the CONUS bbox z=7 (~286 tiles) and z=8
+# (~1075) are ~1360 of the ~1487 tiles in a full z=2..8 pyramid, and on the
+# shared single-vCPU prod box each tile renders in ~1s — so prewarming them
+# ran ~20+ min per grid, far past the ~2-min grid cadence, and the CDN
+# could never catch up to "now". Trimming to z=2..6 (~126 tiles) lets
+# prewarm finish a grid in time so the live pin tracks real time. z>=7 is
+# served by the on-demand write-through path instead (MapLibre's
+# ``maxzoom: 10`` requests those tiles directly), bounding deep-zoom cost
+# by viewer behaviour. Re-add z=7/8 here if the box is scaled up.
 #
-# Tile count for the CONUS bbox: roughly {z=2: 4, z=3: 8, z=4: 24,
-# z=5: 80, z=6: 256, z=7: 800, z=8: 2500} → ~3.7k tiles when computed
-# from the slippy-tile math, but the bbox-intersect shaving below
-# brings the effective count to ~680 (most of the world is ocean).
-DEFAULT_PREWARM_ZOOMS: Final[tuple[int, ...]] = (2, 3, 4, 5, 6, 7, 8)
+# Effective tile count after the bbox-intersect shaving below, per zoom:
+# {z=2: 2, z=3: 4, z=4: 8, z=5: 28, z=6: 84} → ~126 tiles for z=2..6.
+DEFAULT_PREWARM_ZOOMS: Final[tuple[int, ...]] = (2, 3, 4, 5, 6)
 
 # Formats to prewarm. WebP is what every modern browser asks for and
 # what the deployed dashboard requests by default. PNG is kept for the
