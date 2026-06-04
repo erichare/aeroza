@@ -159,6 +159,55 @@ def _is_fully_transparent(rgba: np.ndarray) -> bool:
     return not bool(rgba[..., 3].any())
 
 
+def load_grid(zarr_uri: str, variable: str) -> xr.DataArray:
+    """Open ``zarr_uri`` and eagerly load ``variable`` into memory.
+
+    The returned array is detached from the store — data + coords are
+    in-memory numpy — so the caller can render many tiles from it after the
+    store is closed. Raises ``KeyError`` if the variable is absent, matching
+    the failure shape of :func:`render_tile_image`.
+
+    This is the prewarm fast path: rendering a whole CONUS pyramid means
+    ~1500 tiles per grid, and opening the Zarr store once per tile (what
+    :func:`render_tile_image` does, correctly, for a single on-demand tile)
+    turned a full pyramid into tens of minutes of store-opens. Load once,
+    slice in-memory per tile.
+    """
+    import xarray as xr
+
+    ds = xr.open_zarr(zarr_uri)
+    try:
+        if variable not in ds.variables:
+            raise KeyError(f"variable {variable!r} not in store {zarr_uri}")
+        loaded: xr.DataArray = ds[variable].load()
+        return loaded
+    finally:
+        ds.close()
+
+
+def render_tile_from_loaded_grid(
+    grid: xr.DataArray,
+    *,
+    z: int,
+    x: int,
+    y: int,
+    tile_size: int = TILE_SIZE,
+    format: TileFormat = DEFAULT_TILE_FORMAT,
+) -> bytes:
+    """Render tile ``(z, x, y)`` from an already-loaded grid (:func:`load_grid`).
+
+    Byte-for-byte identical to :func:`render_tile_image` for the same grid +
+    tile — it shares the exact window-slice + sample + encode path, only
+    without the per-tile store open. Asserted in
+    ``tests/test_tile_region_sampling.py``.
+    """
+    bounds = tile_bounds(z, x, y)
+    rgba = _rgba_from_loaded_grid(grid, bounds=bounds, tile_size=tile_size, zoom=z)
+    if _is_fully_transparent(rgba):
+        return transparent_tile_bytes(tile_size=tile_size, format=format)
+    return _encode(rgba, format=format)
+
+
 # Cells of context kept around the tile when slicing the grid, so the blur
 # kernel (radius ~3 at sigma=0.7) and the bilinear 2x2 stencil sample real
 # neighbours rather than the slice's padded edge. 8 > max(blur_radius, 1), so
@@ -254,6 +303,25 @@ def _render_rgba(
         return _sample_into_tile(loaded, bounds=bounds, tile_size=tile_size, zoom=zoom)
     finally:
         ds.close()
+
+
+def _rgba_from_loaded_grid(
+    grid: xr.DataArray,
+    *,
+    bounds: TileBounds,
+    tile_size: int,
+    zoom: int,
+) -> np.ndarray:
+    """Sample an already-in-memory grid into a tile-shaped RGBA array.
+
+    The in-memory twin of :func:`_render_rgba`: no store open, no lazy load.
+    The grid is sliced to the tile's window in-memory (a cheap view) and
+    sampled by the same :func:`_sample_into_tile`, so the result is identical
+    to the open-per-tile path. Drives the prewarm load-once renderer.
+    """
+    window = _tile_index_window(grid, bounds=bounds)
+    da = grid.isel(latitude=window[0], longitude=window[1]) if window is not None else grid
+    return _sample_into_tile(da, bounds=bounds, tile_size=tile_size, zoom=zoom)
 
 
 def _sample_into_tile(
