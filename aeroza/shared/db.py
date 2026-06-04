@@ -58,6 +58,10 @@ def create_engine_and_session(
         pool_size=pool_size,
         max_overflow=max_overflow,
         pool_pre_ping=True,
+        # Recycle connections after 5 min so the engine doesn't hold a slot on
+        # the (session-mode) pooler indefinitely — important when many worker
+        # processes share a small client-connection budget.
+        pool_recycle=300,
         future=True,
     )
     sm = async_sessionmaker(

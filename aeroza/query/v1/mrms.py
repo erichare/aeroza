@@ -41,6 +41,7 @@ from aeroza.query.mrms_grids import (
     MrmsGridItem,
     MrmsGridList,
     find_latest_mrms_grid,
+    find_latest_mrms_grid_cached,
     find_mrms_grid_by_key,
     find_mrms_grids,
     mrms_grid_view_to_item,
@@ -404,7 +405,7 @@ async def get_latest_mrms_grid_route(
         Query(description="MRMS product level (e.g. '00.50')."),
     ] = "00.50",
 ) -> Response:
-    grid = await find_latest_mrms_grid(session, product=product, level=level)
+    grid = await find_latest_mrms_grid_cached(session, product=product, level=level)
     if grid is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -544,7 +545,7 @@ async def get_mrms_tile_route(
             if file_key is not None:
                 grid = await find_mrms_grid_by_key(session, file_key)
             else:
-                grid = await find_latest_mrms_grid(session, product=product, level=level)
+                grid = await find_latest_mrms_grid_cached(session, product=product, level=level)
 
         if grid is None:
             # Return a transparent tile rather than a 404 — the MapLibre
