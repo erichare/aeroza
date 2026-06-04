@@ -9,8 +9,9 @@ the literal paths win over the path-parameter matcher.
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Final
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
@@ -69,6 +70,24 @@ from aeroza.tiles.render_pool import get_render_semaphore
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["mrms"])
+
+
+def _render_timeout_from_env() -> float:
+    raw = os.environ.get("AEROZA_TILE_RENDER_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return 8.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 8.0
+    return value if value > 0 else 8.0
+
+
+# Cold-render wall-clock budget. Past this the tile route abandons the wait
+# (releasing its render-semaphore slot) and returns a transparent tile, so a
+# slow render can't pin the pool and cascade into an all-tiles-block. Normal
+# renders take ~1-6s; 8s caps the tail while leaving headroom.
+_RENDER_TIMEOUT_SECONDS: Final[float] = _render_timeout_from_env()
 
 
 # Cap zoom so a single misbehaving client can't ask for billions of
@@ -563,15 +582,37 @@ async def get_mrms_tile_route(
             # above skip it entirely.
             try:
                 async with get_render_semaphore():
-                    body = await asyncio.to_thread(
-                        render_tile_image,
-                        zarr_uri=grid.zarr_uri,
-                        variable=grid.variable,
-                        z=z,
-                        x=x,
-                        y=y,
-                        format=tile_format,
+                    body = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            render_tile_image,
+                            zarr_uri=grid.zarr_uri,
+                            variable=grid.variable,
+                            z=z,
+                            x=x,
+                            y=y,
+                            format=tile_format,
+                        ),
+                        timeout=_RENDER_TIMEOUT_SECONDS,
                     )
+            except TimeoutError:
+                # A slow/stuck render must not pin its semaphore slot — that's
+                # exactly how a cold-cache burst death-spirals into every tile
+                # blocking. The `async with` has already released the slot;
+                # return a transparent tile (200, not an error) so the client
+                # paints a blank frame and does NOT retry, and the next poll
+                # fills it once the cache + prewarm catch up. (The orphaned
+                # worker thread runs to completion in the background — a thread
+                # can't be cancelled — but the pool is freed, so the system
+                # recovers instead of locking up.)
+                log.warning(
+                    "tile.render_timeout",
+                    file_key=grid.file_key,
+                    z=z,
+                    x=x,
+                    y=y,
+                    timeout_s=_RENDER_TIMEOUT_SECONDS,
+                )
+                return _transparent_tile_response(tile_format)
             except (FileNotFoundError, OSError) as exc:
                 # Specific case worth its own log event — storage gone
                 # underneath us is the single most common cause we've

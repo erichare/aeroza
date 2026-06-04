@@ -150,6 +150,41 @@ async def test_tile_outside_grid_is_transparent(
     assert (alpha == 0).all()
 
 
+async def test_tile_render_timeout_returns_transparent(
+    api_client: AsyncClient,
+    integration_db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A render that exceeds the timeout returns a transparent tile (200), not a
+    hang — so the render-semaphore slot is released and clients don't retry."""
+    import time
+
+    from aeroza.query.v1 import mrms as mrms_routes
+
+    uri = _write_grid(tmp_path / "g.zarr")
+    file = _file("timeout-grid", datetime(2026, 5, 1, 12, 0, tzinfo=UTC))
+    await _seed(integration_db, (file,), (_locator(file.key, uri),))
+
+    def _slow_render(**_kwargs: object) -> bytes:
+        time.sleep(0.5)  # outlasts the tiny timeout below
+        return b"never-returned"
+
+    monkeypatch.setattr(mrms_routes, "render_tile_image", _slow_render)
+    monkeypatch.setattr(mrms_routes, "_RENDER_TIMEOUT_SECONDS", 0.05)
+
+    # Pin a unique fileKey so this tile's cache key can't collide with one a
+    # prior test already rendered + cached (the render LRU is a process
+    # singleton). The tile overlaps the grid, so a normal render would be
+    # opaque — a fully-transparent result proves the timeout fallback fired.
+    response = await api_client.get(
+        "/v1/mrms/tiles/3/2/3.png?fileKey=timeout-grid", headers={"Accept": "image/png"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert (_decode_alpha(response.content) == 0).all()
+
+
 async def test_no_grid_falls_back_to_transparent(api_client: AsyncClient) -> None:
     # No catalog rows seeded; route should return a transparent tile, not
     # a 404, so MapLibre doesn't aggressively retry.
