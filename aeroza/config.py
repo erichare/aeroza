@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     # call back for rich hydration (a reflectivity sample at the saved point).
     public_api_base_url: str = "https://api.aeroza.app"
 
+    # --- Rate limiting (anonymous-abuse protection) ------------------------
+    # Per-IP token bucket over /v1/* (the radar tile endpoint is exempt — one
+    # map view loads dozens of CDN-cached tiles). In-memory / per process,
+    # which suits the single-instance Railway deployment.
+    rate_limit_enabled: bool = True
+    rate_limit_requests_per_minute: float = 240.0
+    rate_limit_burst: float = 120.0
+
     @property
     def apns_configured(self) -> bool:
         """True when enough APNs settings are present to send a push."""
