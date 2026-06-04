@@ -1,8 +1,8 @@
 """``aeroza-prewarm-tiles`` worker.
 
 Long-lived consumer that subscribes to ``aeroza.mrms.grids.new`` and
-renders the full CONUS tile pyramid (z=2..8) for each freshly-
-materialised grid, uploading every tile to Cloudflare R2 so the static
+renders the CONUS tile pyramid (z=2..6) for each freshly-materialised
+grid, uploading every tile to Cloudflare R2 so the static
 ``tiles.aeroza.app`` origin serves them sub-100ms at 100% hit rate.
 
 Without this process running, the only thing populating R2 is the
@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="aeroza-prewarm-tiles",
         description=(
             "Subscribe to materialised-grid events and pre-render the "
-            "CONUS tile pyramid (z=2..8) into Cloudflare R2. Steady-state "
+            "CONUS tile pyramid (z=2..6) into Cloudflare R2. Steady-state "
             "this is what makes 'tiles.aeroza.app/{fileKey}/{z}/{x}/{y}.webp' "
             "a 100% R2 hit instead of falling back to the on-demand "
             "FastAPI tile route."
@@ -66,8 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Zoom levels to prewarm "
             f"(default: {' '.join(map(str, DEFAULT_PREWARM_ZOOMS))}). "
-            "z>=9 quadruples tile count per step and is left to the "
-            "on-demand write-through path."
+            "z>=7 is left to the on-demand write-through path — its tile "
+            "count is too high to prewarm within the grid cadence on a "
+            "single-vCPU box."
         ),
     )
     parser.add_argument(
