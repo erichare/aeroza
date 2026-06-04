@@ -9,6 +9,7 @@ function are enough.
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import suppress
 from pathlib import Path
 
@@ -16,11 +17,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import aeroza.tiles.prewarm as prewarm_module
 from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.stream.subscriber import InMemoryMrmsGridSubscriber
 from aeroza.tiles.cache import CacheKey, TilePngCache
 from aeroza.tiles.prewarm import (
     CONUS_BBOX,
+    _LatestGridMailbox,
     conus_tile_coords,
     prewarm_tiles_for_grid,
     run_prewarm_consumer,
@@ -327,6 +330,154 @@ async def test_consumer_swallows_per_event_errors(tmp_path: Path) -> None:
                 pytest.fail("good event was not processed after the bad one")
             await asyncio.sleep(0.02)
     finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer
+
+
+# ---------------------------------------------------------------------------
+# Conflate-to-latest mailbox — the fix for prewarm marching a stale FIFO
+# backlog it can never clear (which left tiles.aeroza.app 404ing the latest
+# grid, the only one the map ever requests).
+# ---------------------------------------------------------------------------
+
+
+async def test_mailbox_delivers_a_single_grid() -> None:
+    box = _LatestGridMailbox()
+    box.put(_locator("u", file_key="A"))
+
+    got = await box.get()
+
+    assert got is not None
+    locator, superseded = got
+    assert locator.file_key == "A"
+    assert superseded == 0
+
+
+async def test_mailbox_conflates_to_newest_grid() -> None:
+    """Three grids queued before a single get → only the newest is
+    delivered, and the count of superseded grids is reported."""
+    box = _LatestGridMailbox()
+    box.put(_locator("u", file_key="A"))
+    box.put(_locator("u", file_key="B"))
+    box.put(_locator("u", file_key="C"))
+
+    got = await box.get()
+
+    assert got is not None
+    locator, superseded = got
+    assert locator.file_key == "C"  # newest wins
+    assert superseded == 2  # A and B were dropped, not rendered
+
+    # Nothing else is pending — a second get must block, not return a stale grid.
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(box.get(), timeout=0.05)
+
+
+async def test_mailbox_close_delivers_pending_then_none() -> None:
+    box = _LatestGridMailbox()
+    box.put(_locator("u", file_key="A"))
+    box.close()
+
+    first = await box.get()
+    assert first is not None
+    assert first[0].file_key == "A"
+
+    # Drained: every subsequent get returns None so the consumer can exit.
+    assert await box.get() is None
+    assert await box.get() is None
+
+
+async def test_mailbox_close_with_empty_slot_returns_none() -> None:
+    box = _LatestGridMailbox()
+    box.close()
+    assert await box.get() is None
+
+
+async def test_consumer_coalesces_grids_arriving_during_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While grid A's pyramid renders, grids B and C arrive. The consumer
+    must coalesce them to the newest (C) and skip the stale middle grid
+    (B) entirely — this is what stops prewarm grinding through a backlog
+    it can never clear and lets the CDN track 'now'."""
+    uri = _write_conus_grid(tmp_path / "g.zarr")
+    cache = TilePngCache(max_bytes=8 * 1024 * 1024)
+    subscriber = InMemoryMrmsGridSubscriber()
+
+    first_render_entered = threading.Event()
+    release_first_render = threading.Event()
+    real_render = prewarm_module.render_tile_image
+    calls = {"n": 0}
+
+    def gated_render(**kwargs: object) -> bytes:
+        # Hold the very first tile render in-flight so B and C pile up
+        # behind grid A and the mailbox has to conflate them.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            first_render_entered.set()
+            if not release_first_render.wait(timeout=5.0):
+                raise AssertionError("render gate was never released")
+        return real_render(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(prewarm_module, "render_tile_image", gated_render)
+
+    loop = asyncio.get_running_loop()
+    target = len(conus_tile_coords(4))
+
+    def rendered(file_key: str) -> int:
+        return sum(
+            1
+            for x, y in conus_tile_coords(4)
+            if cache.get(CacheKey(file_key=file_key, z=4, x=x, y=y, format="png")) is not None
+        )
+
+    consumer = asyncio.create_task(
+        run_prewarm_consumer(
+            subscriber=subscriber,
+            r2_client=None,
+            lru_cache=cache,
+            zooms=(4,),
+            formats=("png",),
+        )
+    )
+    try:
+        await subscriber.wait_for_subscriber_count(1, timeout=1.0)
+        await subscriber.push(_locator(uri, file_key="A"))
+
+        # Wait until A's first tile is rendering (blocked on the gate).
+        deadline = loop.time() + 2.0
+        while not first_render_entered.is_set():
+            if loop.time() >= deadline:
+                pytest.fail("first render never started")
+            await asyncio.sleep(0.01)
+
+        # B and C arrive mid-render; the ingest task conflates them in the
+        # mailbox. Wait until the subscription queue is drained so we know
+        # both reached the mailbox (B superseded by C) before releasing A.
+        await subscriber.push(_locator(uri, file_key="B"))
+        await subscriber.push(_locator(uri, file_key="C"))
+        ingest_queue = subscriber._queues[0]
+        deadline = loop.time() + 2.0
+        while not ingest_queue.empty():
+            if loop.time() >= deadline:
+                pytest.fail("ingest never drained B and C into the mailbox")
+            await asyncio.sleep(0.01)
+
+        release_first_render.set()
+
+        # A (the in-flight grid) finishes, then the loop jumps straight to C.
+        deadline = loop.time() + 3.0
+        while not (rendered("A") == target and rendered("C") == target):
+            if loop.time() >= deadline:
+                pytest.fail("A and C were not both rendered after coalescing")
+            await asyncio.sleep(0.02)
+
+        assert rendered("A") == target  # the render that was in flight completed
+        assert rendered("C") == target  # the newest grid was picked up next
+        assert rendered("B") == 0  # the stale middle grid was coalesced away
+    finally:
+        release_first_render.set()  # never leave a worker thread blocked
         consumer.cancel()
         with suppress(asyncio.CancelledError):
             await consumer

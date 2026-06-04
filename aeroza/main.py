@@ -54,11 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       API still serves DB-backed routes; the streaming endpoint surfaces
       503. Tests bypass this hook entirely (httpx ASGITransport doesn't run
       lifespan) and set both attributes on ``app.state`` themselves.
-    - When NATS is reachable, also spin up a background consumer that
-      prewarms the tile LRU on every newly-materialised MRMS grid. Same
-      best-effort posture: if the connection drops mid-run we log and
-      let the consumer task wind down — tile rendering still works,
-      just cold-on-first-hit. The task is cancelled on shutdown.
+    - When NATS is reachable *and* R2 is not configured (local dev),
+      also spin up a background consumer that prewarms the in-process
+      tile LRU on every newly-materialised MRMS grid. In production R2
+      IS configured and the dedicated ``prewarm`` worker process owns
+      CDN population, so the API process skips it to avoid doubling the
+      render load. Best-effort either way: if NATS drops mid-run we log
+      and let the consumer wind down; the task is cancelled on shutdown.
     """
     settings: Settings = get_settings()
     async with AsyncExitStack() as stack:
@@ -71,21 +73,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             nats_client = await stack.enter_async_context(nats_connection(settings.nats_url))
             subscriber = NatsAlertSubscriber(nats_client)
-            grid_subscriber = NatsMrmsGridSubscriber(nats_client)
-            # R2 is the production publication target; the LRU stays
-            # wired as a fallback so local dev (no R2 configured)
-            # still benefits from pre-rendered bytes on the on-demand
-            # FastAPI route. ``get_default_r2_client`` returns None
-            # when any of the AEROZA_R2_* env vars is blank.
+            # ``get_default_r2_client`` returns None when any of the
+            # AEROZA_R2_* env vars is blank. When R2 *is* configured
+            # (production), the dedicated ``prewarm`` worker process
+            # owns CDN population — running a second consumer in the API
+            # process would only double the render load and steal CPU
+            # from request serving, so we skip it here. When R2 is not
+            # configured (local dev) there is no separate worker, so we
+            # warm the in-process LRU instead, keeping the on-demand tile
+            # route from being cold-on-first-hit.
             r2_client = get_default_r2_client()
-            prewarm_task = asyncio.create_task(
-                run_prewarm_consumer(
-                    subscriber=grid_subscriber,
-                    r2_client=r2_client,
-                    lru_cache=get_default_cache() if r2_client is None else None,
-                ),
-                name="tiles.prewarm.consumer",
-            )
+            if r2_client is None:
+                grid_subscriber = NatsMrmsGridSubscriber(nats_client)
+                prewarm_task = asyncio.create_task(
+                    run_prewarm_consumer(
+                        subscriber=grid_subscriber,
+                        r2_client=None,
+                        lru_cache=get_default_cache(),
+                    ),
+                    name="tiles.prewarm.consumer",
+                )
         except Exception as exc:
             log.warning(
                 "startup.nats_unavailable",

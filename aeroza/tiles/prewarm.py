@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Final
 
@@ -293,6 +294,66 @@ async def _publish_tile(
         lru_cache.put(CacheKey(file_key=file_key, z=z, x=x, y=y, format=fmt), body)
 
 
+class _LatestGridMailbox:
+    """Single-slot, conflating mailbox that keeps only the newest grid.
+
+    Rendering one grid's full CONUS pyramid (~680–1400 tiles) on a
+    shared Railway box takes longer than the ~2-minute MRMS grid
+    cadence. The core-NATS client buffers grids FIFO, so a naive
+    ``async for`` drains them oldest-first and marches through stale
+    history, never catching up to "now" — which left
+    ``tiles.aeroza.app`` 404ing the *latest* grid, the only one the map
+    ever requests.
+
+    This mailbox closes that gap: :meth:`put` overwrites any unconsumed
+    grid (the producer always wins), and :meth:`get` returns the
+    freshest grid plus the number of stale grids it superseded. The
+    render loop therefore always works on "now" and can fall at most
+    one render cycle behind, no matter how far the FIFO buffer piled up
+    while it was busy.
+    """
+
+    __slots__ = ("_closed", "_latest", "_ready", "_superseded")
+
+    def __init__(self) -> None:
+        self._latest: MrmsGridLocator | None = None
+        self._superseded = 0
+        self._ready = asyncio.Event()
+        self._closed = False
+
+    def put(self, locator: MrmsGridLocator) -> None:
+        """Store ``locator`` as the newest grid, dropping any pending one."""
+        if self._latest is not None:
+            self._superseded += 1
+        self._latest = locator
+        self._ready.set()
+
+    def close(self) -> None:
+        """Signal the producer has ended. A pending grid is still
+        delivered by the next :meth:`get`; subsequent gets return
+        ``None`` so the consumer loop can exit."""
+        self._closed = True
+        self._ready.set()
+
+    async def get(self) -> tuple[MrmsGridLocator, int] | None:
+        """Wait for and return ``(newest_grid, superseded_count)``.
+
+        Returns ``None`` once the producer has closed and the slot is
+        empty. The slot read + reset below runs without an ``await``,
+        so a concurrent :meth:`put` cannot interleave and be lost.
+        """
+        await self._ready.wait()
+        if self._latest is None:
+            return None  # closed with an empty slot
+        locator = self._latest
+        superseded = self._superseded
+        self._latest = None
+        self._superseded = 0
+        if not self._closed:
+            self._ready.clear()
+        return locator, superseded
+
+
 async def run_prewarm_consumer(
     *,
     subscriber: MrmsGridSubscriber,
@@ -303,9 +364,14 @@ async def run_prewarm_consumer(
 ) -> None:
     """Long-lived consumer: drain ``aeroza.mrms.grids.new`` and prewarm.
 
-    Runs forever until cancelled. Per-event errors are logged and
+    Runs forever until cancelled. Grids are funnelled through a
+    :class:`_LatestGridMailbox`, so while one grid's pyramid is
+    rendering any grids that arrive behind it are **coalesced to the
+    newest** — the loop always picks up "now" instead of grinding
+    through a stale FIFO backlog it can never clear (the bug that left
+    the CDN 404ing the latest grid). Per-event errors are logged and
     swallowed so a single bad grid doesn't tear down the subscription.
-    Cancellation propagates cleanly via the underlying async generator.
+    Cancellation propagates cleanly.
 
     The caller decides the publication target (R2 / LRU / both) by
     passing the appropriate clients; this function is purely event-
@@ -317,8 +383,27 @@ async def run_prewarm_consumer(
         formats=tuple(formats),
         target="r2" if r2_client is not None else ("lru" if lru_cache is not None else "noop"),
     )
+
+    mailbox = _LatestGridMailbox()
+
+    async def _ingest() -> None:
+        # Drain the subscription as fast as grids arrive, conflating
+        # them into the single-slot mailbox. This loop never renders,
+        # so it keeps pace with the broker no matter how slow the
+        # render side is.
+        try:
+            async for locator in subscriber.subscribe_new_grids():
+                mailbox.put(locator)
+        finally:
+            mailbox.close()
+
+    ingest_task = asyncio.create_task(_ingest(), name="tiles.prewarm.ingest")
     try:
-        async for locator in subscriber.subscribe_new_grids():
+        while True:
+            item = await mailbox.get()
+            if item is None:
+                break  # producer closed (NATS dropped) and the slot drained
+            locator, superseded = item
             try:
                 stats = await prewarm_tiles_for_grid(
                     locator,
@@ -340,11 +425,15 @@ async def run_prewarm_consumer(
                 rendered=stats.rendered,
                 failed=stats.failed,
                 skipped_existing=stats.skipped_existing,
+                coalesced_stale=superseded,
             )
     except asyncio.CancelledError:
         log.info("tiles.prewarm.consumer.cancelled")
         raise
     finally:
+        ingest_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ingest_task
         log.info("tiles.prewarm.consumer.stop")
 
 
