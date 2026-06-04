@@ -38,6 +38,7 @@ bucket lifecycle rule as a backstop.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -65,6 +66,19 @@ TILE_CACHE_CONTROL: Final[str] = "public, max-age=31536000, immutable"
 # concerns by *bucket* not by prefix. Same convention as the source
 # layout: ``CONUS/MergedReflectivity_…/2026…/MRMS_…grib2.gz``.
 TILE_KEY_TEMPLATE: Final[str] = "{file_key}/{z}/{x}/{y}.{format}"
+
+# Well-known pointer object naming the newest grid whose full pyramid is
+# published. The frontend reads ``tiles.aeroza.app/latest.json`` to pin
+# the live radar, so it only ever requests a grid whose tiles are already
+# in R2 — no 404 churn during the render window after a fresher grid
+# materialises. Lives at the bucket root, so the per-grid ``delete_grid``
+# prefix sweep and retention never touch it.
+LATEST_POINTER_KEY: Final[str] = "latest.json"
+
+# Unlike immutable tiles, the pointer flips every grid cycle (~2 min), and
+# the frontend polls it ~every 30s. A short max-age keeps the CDN edge from
+# pinning a stale grid while still absorbing the bulk of reads.
+POINTER_CACHE_CONTROL: Final[str] = "public, max-age=15"
 
 # Pagination cap for the list-then-delete pass in ``delete_grid``. R2's
 # ListObjectsV2 returns up to 1000 keys per call; we set the page size
@@ -124,6 +138,40 @@ class R2Client:
             Body=body,
             ContentType=_content_type_for(fmt),
             CacheControl=TILE_CACHE_CONTROL,
+        )
+
+    async def put_latest_pointer(
+        self,
+        *,
+        file_key: str,
+        valid_at: str,
+        product: str,
+        level: str,
+    ) -> None:
+        """Publish the "latest fully-prewarmed grid" pointer at ``latest.json``.
+
+        Written by the prewarm consumer *after* a grid's whole pyramid is
+        uploaded, so the frontend can pin to a grid that's guaranteed to be
+        in R2. Mirrors the ``/v1/mrms/latest`` JSON shape
+        (``{fileKey, validAt, product, level}``) so the web client can reuse
+        its parsing. Short Cache-Control (not immutable) because it changes
+        every grid cycle.
+        """
+        body = json.dumps(
+            {
+                "fileKey": file_key,
+                "validAt": valid_at,
+                "product": product,
+                "level": level,
+            }
+        ).encode("utf-8")
+        await asyncio.to_thread(
+            self._client.put_object,
+            Bucket=self.bucket,
+            Key=LATEST_POINTER_KEY,
+            Body=body,
+            ContentType="application/json",
+            CacheControl=POINTER_CACHE_CONTROL,
         )
 
     async def object_exists(
@@ -275,6 +323,8 @@ R2TileFormat = Literal["webp", "png"]
 
 
 __all__ = [
+    "LATEST_POINTER_KEY",
+    "POINTER_CACHE_CONTROL",
     "TILE_CACHE_CONTROL",
     "TILE_KEY_TEMPLATE",
     "R2Client",

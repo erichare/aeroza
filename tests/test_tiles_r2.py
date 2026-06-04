@@ -11,6 +11,7 @@ No real R2 traffic, no environment dependency, runs as a unit test.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -19,6 +20,8 @@ from botocore.exceptions import ClientError
 
 from aeroza.config import Settings
 from aeroza.tiles.r2 import (
+    LATEST_POINTER_KEY,
+    POINTER_CACHE_CONTROL,
     TILE_CACHE_CONTROL,
     R2Client,
     build_r2_client,
@@ -120,6 +123,38 @@ async def test_put_tile_rejects_unsupported_format() -> None:
 
     with pytest.raises(ValueError, match="unsupported tile format"):
         await r2.put_tile(file_key="fk", z=0, x=0, y=0, fmt="jpg", body=b"")
+
+
+async def test_put_latest_pointer_writes_json_with_short_cache_control() -> None:
+    """The pointer is the one object that must NOT be immutable-cached: it
+    flips every grid cycle. Assert the key, JSON body shape, JSON MIME, and
+    the short Cache-Control — getting any of these wrong silently pins the
+    map to a stale grid at the CDN edge.
+    """
+    fake = _fake_client()
+    r2 = R2Client(bucket="bk", endpoint="https://e.example", _client=fake)
+
+    await r2.put_latest_pointer(
+        file_key="CONUS/MergedReflectivityComposite_00.50/20260604/grid.grib2.gz",
+        valid_at="2026-06-04T17:20:42+00:00",
+        product="MergedReflectivityComposite",
+        level="00.50",
+    )
+
+    fake.put_object.assert_called_once()
+    kwargs = fake.put_object.call_args.kwargs
+    assert kwargs["Bucket"] == "bk"
+    assert kwargs["Key"] == LATEST_POINTER_KEY
+    assert kwargs["ContentType"] == "application/json"
+    assert kwargs["CacheControl"] == POINTER_CACHE_CONTROL
+    assert kwargs["CacheControl"] != TILE_CACHE_CONTROL  # never immutable
+    payload = json.loads(kwargs["Body"])
+    assert payload == {
+        "fileKey": "CONUS/MergedReflectivityComposite_00.50/20260604/grid.grib2.gz",
+        "validAt": "2026-06-04T17:20:42+00:00",
+        "product": "MergedReflectivityComposite",
+        "level": "00.50",
+    }
 
 
 async def test_object_exists_returns_true_when_head_succeeds() -> None:

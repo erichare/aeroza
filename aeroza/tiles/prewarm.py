@@ -48,6 +48,7 @@ from typing import Final
 
 import structlog
 
+from aeroza.ingest.mrms import parse_mrms_key
 from aeroza.ingest.mrms_zarr import MrmsGridLocator
 from aeroza.stream.subscriber import MrmsGridSubscriber
 from aeroza.tiles.cache import CacheKey, TilePngCache
@@ -354,6 +355,40 @@ class _LatestGridMailbox:
         return locator, superseded
 
 
+async def _publish_latest_pointer(r2_client: R2Client, locator: MrmsGridLocator) -> None:
+    """Point ``latest.json`` at the grid we just finished publishing.
+
+    Best-effort: the pyramid is already in R2, so a parse miss or a failed
+    pointer write only delays the frontend advancing by one grid — never a
+    reason to tear down the consumer. The frontend reads this pointer to pin
+    the live radar, so it never requests a grid whose tiles aren't uploaded
+    yet (the ~render-cycle 404 window after a fresher grid materialises).
+    """
+    parsed = parse_mrms_key(locator.file_key)
+    if parsed is None:
+        log.warning("tiles.prewarm.pointer.unparseable_key", file_key=locator.file_key)
+        return
+    try:
+        await r2_client.put_latest_pointer(
+            file_key=locator.file_key,
+            valid_at=parsed.valid_at.isoformat(),
+            product=parsed.product,
+            level=parsed.level,
+        )
+    except Exception as exc:
+        log.warning(
+            "tiles.prewarm.pointer.failed",
+            file_key=locator.file_key,
+            error=str(exc),
+        )
+        return
+    log.info(
+        "tiles.prewarm.pointer.updated",
+        file_key=locator.file_key,
+        valid_at=parsed.valid_at.isoformat(),
+    )
+
+
 async def run_prewarm_consumer(
     *,
     subscriber: MrmsGridSubscriber,
@@ -427,6 +462,12 @@ async def run_prewarm_consumer(
                 skipped_existing=stats.skipped_existing,
                 coalesced_stale=superseded,
             )
+            # Advance the frontend's live pin only once the grid's tiles are
+            # actually in R2 (rendered now or already present). A grid that
+            # totally failed to render leaves the pointer on the last good
+            # one rather than pinning the map to an empty grid.
+            if r2_client is not None and (stats.rendered + stats.skipped_existing) > 0:
+                await _publish_latest_pointer(r2_client, locator)
     except asyncio.CancelledError:
         log.info("tiles.prewarm.consumer.cancelled")
         raise
