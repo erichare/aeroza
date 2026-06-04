@@ -159,6 +159,70 @@ def _is_fully_transparent(rgba: np.ndarray) -> bool:
     return not bool(rgba[..., 3].any())
 
 
+# Cells of context kept around the tile when slicing the grid, so the blur
+# kernel (radius ~3 at sigma=0.7) and the bilinear 2x2 stencil sample real
+# neighbours rather than the slice's padded edge. 8 > max(blur_radius, 1), so
+# the sampled tile pixels are byte-identical to a full-grid render — asserted
+# in tests/test_tile_region_sampling.py.
+_TILE_SLICE_MARGIN_CELLS: int = 8
+
+
+def _axis_window(coord: np.ndarray, lo: float, hi: float, margin: int) -> slice | None:
+    """Index slice of ``coord`` covering ``[lo, hi]`` plus ``margin`` cells.
+
+    Works for ascending or descending axes. Returns ``None`` when the range
+    can't yield a usable window (caller falls back to the full grid).
+    """
+    if coord.size < 2:
+        return None
+    ascending = bool(coord[-1] >= coord[0])
+    asc = coord if ascending else coord[::-1]
+    left = max(0, int(np.searchsorted(asc, lo, side="left")) - margin)
+    right = min(asc.size, int(np.searchsorted(asc, hi, side="right")) + margin)
+    if left >= right:
+        return None
+    if ascending:
+        return slice(left, right)
+    n = coord.size
+    return slice(n - right, n - left)
+
+
+def _spans_full_axis(s: slice, size: int) -> bool:
+    return (s.start or 0) == 0 and (s.stop if s.stop is not None else size) == size
+
+
+def _tile_index_window(da: xr.DataArray, *, bounds: TileBounds) -> tuple[slice, slice] | None:
+    """Lat/lng index window into ``da`` covering the tile (+ margin), or ``None``.
+
+    ``None`` means "use the whole grid" — returned for any case a single
+    contiguous window can't be trusted (non-2D data, missing coords, a
+    longitude seam wrap, or a window that already spans the full axis so
+    slicing buys nothing). Reading the 1-D coord arrays is cheap; the 2-D
+    values stay lazy until the caller's ``.isel(...).load()``.
+    """
+    if da.ndim != 2 or "latitude" not in da.coords or "longitude" not in da.coords:
+        return None
+    lat = np.asarray(da["latitude"].values, dtype=np.float64)
+    lng = np.asarray(da["longitude"].values, dtype=np.float64)
+
+    lat_window = _axis_window(lat, bounds.lat_min, bounds.lat_max, _TILE_SLICE_MARGIN_CELLS)
+    if lat_window is None:
+        return None
+
+    # Tile longitudes are [-180, 180]; the grid may be native [0, 360). A pair
+    # that reorders after conversion straddles the seam — bail to the full grid.
+    grid_lng = _to_grid_longitude(np.array([bounds.lng_min, bounds.lng_max]), lng)
+    if float(grid_lng[0]) > float(grid_lng[1]):
+        return None
+    lng_window = _axis_window(lng, float(grid_lng[0]), float(grid_lng[1]), _TILE_SLICE_MARGIN_CELLS)
+    if lng_window is None:
+        return None
+
+    if _spans_full_axis(lat_window, lat.size) and _spans_full_axis(lng_window, lng.size):
+        return None
+    return lat_window, lng_window
+
+
 def _render_rgba(
     *,
     zarr_uri: str,
@@ -167,15 +231,27 @@ def _render_rgba(
     tile_size: int,
     zoom: int,
 ) -> np.ndarray:
-    """Sample the grid into a tile-shaped RGBA array."""
+    """Sample the grid into a tile-shaped RGBA array.
+
+    Loads only the lat/lng window the tile needs (+ a margin) instead of the
+    whole grid — at high zoom that's a few thousand cells rather than tens of
+    millions, and the blur + sample (the bulk of the cold-render cost) then run
+    over the small slice. Falls back to the full grid whenever a safe window
+    can't be computed; see :func:`_tile_index_window`.
+    """
     import xarray as xr
 
     ds = xr.open_zarr(zarr_uri)
     try:
         if variable not in ds.variables:
             raise KeyError(f"variable {variable!r} not in store {zarr_uri}")
-        da = ds[variable].load()
-        return _sample_into_tile(da, bounds=bounds, tile_size=tile_size, zoom=zoom)
+        da = ds[variable]
+        window = _tile_index_window(da, bounds=bounds)
+        if window is not None:
+            lat_slice, lng_slice = window
+            da = da.isel(latitude=lat_slice, longitude=lng_slice)
+        loaded = da.load()
+        return _sample_into_tile(loaded, bounds=bounds, tile_size=tile_size, zoom=zoom)
     finally:
         ds.close()
 
