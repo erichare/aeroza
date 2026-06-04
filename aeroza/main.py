@@ -121,6 +121,20 @@ def create_app() -> FastAPI:
     )
 
     settings = get_settings()
+
+    # Added before CORS so CORS stays the outermost layer (preflights and 429s
+    # still get CORS headers). Per-IP token bucket; see aeroza.shared.ratelimit.
+    if settings.rate_limit_enabled:
+        from aeroza.shared.ratelimit import InMemoryRateLimiter, RateLimitMiddleware
+
+        app.add_middleware(
+            RateLimitMiddleware,
+            limiter=InMemoryRateLimiter(
+                capacity=settings.rate_limit_burst,
+                refill_per_second=settings.rate_limit_requests_per_minute / 60.0,
+            ),
+        )
+
     cors_origins: list[str] = []
     if settings.env == "development":
         cors_origins.extend(DEV_CONSOLE_ORIGINS)

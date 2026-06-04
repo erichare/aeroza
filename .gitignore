@@ -80,4 +80,5 @@ docker-compose.override.yml
 # Secrets
 *.pem
 *.key
+*.p8
 secrets/

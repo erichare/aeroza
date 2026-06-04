@@ -25,6 +25,7 @@ import structlog
 from aeroza.config import Settings, get_settings
 from aeroza.ingest.poll import poll_nws_alerts_once
 from aeroza.ingest.scheduler import IntervalLoop
+from aeroza.push.dispatch import aclose_publisher, build_push_publisher
 from aeroza.shared.db import Database, create_engine_and_session
 from aeroza.stream.nats import NatsAlertPublisher, nats_connection
 from aeroza.stream.publisher import AlertPublisher, NullAlertPublisher
@@ -87,8 +88,16 @@ async def _run(*, args: argparse.Namespace, settings: Settings) -> int:
             return 0
 
         async with nats_connection(settings.nats_url) as nats_client:
-            publisher = NatsAlertPublisher(nats_client)
-            await _drive(db=db, publisher=publisher, args=args)
+            # Wrap the NATS publisher so each newly-ingested warning also fans
+            # out as APNs pushes to devices saved inside its polygon. When APNs
+            # isn't configured this returns the inner publisher unchanged.
+            publisher: AlertPublisher = build_push_publisher(
+                NatsAlertPublisher(nats_client), db=db, settings=settings
+            )
+            try:
+                await _drive(db=db, publisher=publisher, args=args)
+            finally:
+                await aclose_publisher(publisher)
         return 0
     finally:
         await db.dispose()

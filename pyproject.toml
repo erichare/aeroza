@@ -22,8 +22,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "httpx>=0.27",
+    # http2 extra pulls `h2`, required to talk HTTP/2 to APNs (api.push.apple.com).
+    "httpx[http2]>=0.27",
     "structlog>=24.4",
+    # ES256 signing of APNs provider tokens from the .p8 key.
+    "cryptography>=43.0",
 ]
 
 [project.optional-dependencies]

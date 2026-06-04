@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from aeroza.push.routes import router as _push_router
 from aeroza.query.v1.alerts import _alert_event_stream  # re-exported for tests
 from aeroza.query.v1.alerts import router as _alerts_router
 from aeroza.query.v1.calibration import router as _calibration_router
@@ -43,5 +44,6 @@ router.include_router(_nowcasts_router)
 router.include_router(_stats_router)
 router.include_router(_calibration_router)
 router.include_router(_metar_router)
+router.include_router(_push_router)
 
 __all__ = ["_alert_event_stream", "router"]

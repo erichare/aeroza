@@ -83,6 +83,36 @@ class Settings(BaseSettings):
     retention_interval_seconds: float = 600.0
     retention_batch_size: int = 500
 
+    # --- APNs (severe-weather push) ----------------------------------------
+    # Token-based Apple Push auth. The .p8 private key lives only in env
+    # (Railway secret / local .env), never in git. When key id / team id /
+    # private key is blank, push dispatch short-circuits to a no-op so dev and
+    # test runs without a key still work. ``apns_private_key`` accepts either
+    # the raw multi-line PEM (-----BEGIN PRIVATE KEY----- …) or a single-line
+    # base64 of the .p8 file (robust against env UIs that mangle newlines).
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_private_key: str = ""
+    apns_topic: str = "app.aeroza.AerozaOne"
+    apns_use_sandbox: bool = False
+
+    # Base URL the push payload tells the iOS Notification Service Extension to
+    # call back for rich hydration (a reflectivity sample at the saved point).
+    public_api_base_url: str = "https://api.aeroza.app"
+
+    # --- Rate limiting (anonymous-abuse protection) ------------------------
+    # Per-IP token bucket over /v1/* (the radar tile endpoint is exempt — one
+    # map view loads dozens of CDN-cached tiles). In-memory / per process,
+    # which suits the single-instance Railway deployment.
+    rate_limit_enabled: bool = True
+    rate_limit_requests_per_minute: float = 240.0
+    rate_limit_burst: float = 120.0
+
+    @property
+    def apns_configured(self) -> bool:
+        """True when enough APNs settings are present to send a push."""
+        return bool(self.apns_key_id and self.apns_team_id and self.apns_private_key)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
