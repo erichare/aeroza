@@ -481,3 +481,139 @@ async def test_consumer_coalesces_grids_arriving_during_render(
         consumer.cancel()
         with suppress(asyncio.CancelledError):
             await consumer
+
+
+# ---------------------------------------------------------------------------
+# latest.json pointer — lets the frontend pin to the newest grid that's
+# actually in R2, so it never requests tiles still mid-render.
+# ---------------------------------------------------------------------------
+
+_VALID_MRMS_KEY = (
+    "CONUS/MergedReflectivityComposite_00.50/20260604/"
+    "MRMS_MergedReflectivityComposite_00.50_20260604-172042.grib2.gz"
+)
+
+
+def _mrms_locator(zarr_uri: str) -> MrmsGridLocator:
+    """A locator whose ``file_key`` is a real MRMS key (parseable into
+    product/level/valid_at), pointed at a renderable test grid."""
+    return MrmsGridLocator(
+        file_key=_VALID_MRMS_KEY,
+        zarr_uri=zarr_uri,
+        variable="reflectivity",
+        dims=("latitude", "longitude"),
+        shape=(32, 32),
+        dtype="float32",
+        nbytes=32 * 32 * 4,
+    )
+
+
+class _PointerRecordingR2:
+    """Fake R2 client that records tile uploads + pointer writes."""
+
+    def __init__(self) -> None:
+        self.put_tile_calls: list[tuple[str, int, int, int, str]] = []
+        self.pointer_calls: list[dict[str, str]] = []
+
+    async def put_tile(
+        self, *, file_key: str, z: int, x: int, y: int, fmt: str, body: bytes
+    ) -> None:
+        self.put_tile_calls.append((file_key, z, x, y, fmt))
+
+    async def object_exists(self, *, file_key: str, z: int, x: int, y: int, fmt: str) -> bool:
+        return False
+
+    async def put_latest_pointer(
+        self, *, file_key: str, valid_at: str, product: str, level: str
+    ) -> None:
+        self.pointer_calls.append(
+            {"file_key": file_key, "valid_at": valid_at, "product": product, "level": level}
+        )
+
+
+async def test_consumer_publishes_latest_pointer_after_grid(tmp_path: Path) -> None:
+    """After a grid's pyramid uploads, the consumer points latest.json at it
+    with the fields parsed from the MRMS key — this is what lets the frontend
+    pin to a grid guaranteed to be in R2."""
+    uri = _write_conus_grid(tmp_path / "g.zarr")
+    fake = _PointerRecordingR2()
+    subscriber = InMemoryMrmsGridSubscriber()
+    loop = asyncio.get_running_loop()
+
+    consumer = asyncio.create_task(
+        run_prewarm_consumer(
+            subscriber=subscriber,
+            r2_client=fake,  # type: ignore[arg-type]
+            lru_cache=None,
+            zooms=(4,),
+            formats=("webp",),
+        )
+    )
+    try:
+        await subscriber.wait_for_subscriber_count(1, timeout=1.0)
+        await subscriber.push(_mrms_locator(uri))
+
+        deadline = loop.time() + 3.0
+        while not fake.pointer_calls:
+            if loop.time() >= deadline:
+                pytest.fail("consumer never published the latest.json pointer")
+            await asyncio.sleep(0.02)
+
+        assert len(fake.pointer_calls) == 1
+        call = fake.pointer_calls[0]
+        assert call["file_key"] == _VALID_MRMS_KEY
+        assert call["product"] == "MergedReflectivityComposite"
+        assert call["level"] == "00.50"
+        assert call["valid_at"] == "2026-06-04T17:20:42+00:00"
+        # The pointer is published only after the tiles are actually in R2.
+        assert len(fake.put_tile_calls) == len(conus_tile_coords(4))
+    finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer
+
+
+async def test_consumer_skips_pointer_for_unparseable_key(tmp_path: Path) -> None:
+    """A grid whose key isn't MRMS-shaped still gets its tiles uploaded, but
+    the pointer is *not* advanced to it — the map would have no validAt to
+    show and the key may not be a real grid. The next valid grid advances it."""
+    uri = _write_conus_grid(tmp_path / "g.zarr")
+    fake = _PointerRecordingR2()
+    subscriber = InMemoryMrmsGridSubscriber()
+    loop = asyncio.get_running_loop()
+    target = len(conus_tile_coords(4))
+
+    consumer = asyncio.create_task(
+        run_prewarm_consumer(
+            subscriber=subscriber,
+            r2_client=fake,  # type: ignore[arg-type]
+            lru_cache=None,
+            zooms=(4,),
+            formats=("webp",),
+        )
+    )
+    try:
+        await subscriber.wait_for_subscriber_count(1, timeout=1.0)
+
+        # Render the bad grid fully first (so it isn't coalesced away), then
+        # a good grid — the only pointer write must be for the good one.
+        await subscriber.push(_locator(uri, file_key="not-an-mrms-key"))
+        deadline = loop.time() + 3.0
+        while len(fake.put_tile_calls) < target:
+            if loop.time() >= deadline:
+                pytest.fail("bad grid's tiles were never uploaded")
+            await asyncio.sleep(0.02)
+        assert fake.pointer_calls == []  # bad grid did not advance the pointer
+
+        await subscriber.push(_mrms_locator(uri))
+        deadline = loop.time() + 3.0
+        while not fake.pointer_calls:
+            if loop.time() >= deadline:
+                pytest.fail("good grid never advanced the pointer")
+            await asyncio.sleep(0.02)
+        assert len(fake.pointer_calls) == 1
+        assert fake.pointer_calls[0]["file_key"] == _VALID_MRMS_KEY
+    finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer

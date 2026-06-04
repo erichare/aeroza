@@ -6,8 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type AlertFeatureCollection,
+  type LatestPrewarmedGrid,
   type MrmsGridItem,
   type Severity,
+  fetchLatestPrewarmedGrid,
   fetchMrmsGrids,
 } from "@/lib/api";
 import { StatusDot } from "@/components/StatusDot";
@@ -80,6 +82,14 @@ export default function MapPage() {
   const [recentGrids, setRecentGrids] = useState<ReadonlyArray<MrmsGridItem>>(
     [],
   );
+  // Newest grid whose full tile pyramid is published to R2 (the static-origin
+  // ``latest.json`` pointer). Used to pin the live radar to a grid that's
+  // guaranteed to be a CDN hit, instead of the freshest *materialised* grid
+  // whose tiles may still be mid-render. Null in local dev (no static origin)
+  // or before the first poll lands — callers fall back to the catalog grid.
+  const [prewarmedGrid, setPrewarmedGrid] = useState<LatestPrewarmedGrid | null>(
+    null,
+  );
   const [showRadar, setShowRadar] = useState(true);
 
   // 1h radar auto-loop. It starts paused because a full CONUS replay can
@@ -131,6 +141,26 @@ export default function MapPage() {
     };
   }, []);
 
+  // Poll the static origin's "latest fully-prewarmed grid" pointer. This
+  // advances only once a grid's tiles are actually in R2, so pinning the
+  // live radar to it never 404s. A failed/empty poll is left as-is (sticky)
+  // rather than clearing the pin, so a transient blip doesn't blank the map.
+  // No-op when the static origin is unset (fetchLatestPrewarmedGrid → null);
+  // the live pin then falls through to the newest catalog grid below.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const pointer = await fetchLatestPrewarmedGrid();
+      if (!cancelled && pointer) setPrewarmedGrid(pointer);
+    };
+    void load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   // Last-hour subset of recent grids — drives the auto-loop. Memoised
   // off ``liveAt`` so the cutoff slides forward at the same cadence as
   // the rest of the page; that way newly-arrived grids slot into the
@@ -151,9 +181,16 @@ export default function MapPage() {
   // the radar still trends fresh — but without the per-minute URL
   // mutation that previously defeated the HTTP cache.
   const liveLatestFileKey = useMemo<string | null>(() => {
+    // Prefer the latest fully-prewarmed grid: every tile is guaranteed in R2,
+    // so the live radar is a 100% CDN hit with no 404 flicker during the
+    // render window after a fresher grid materialises. It lags real time by
+    // at most one render cycle — imperceptible for radar.
+    if (prewarmedGrid) return prewarmedGrid.fileKey;
+    // Fallback (static origin unset, or pointer not yet polled): newest
+    // catalog grid, served via the on-demand route's R2 write-through.
     if (recentGrids.length === 0) return null;
     return recentGrids[recentGrids.length - 1]?.fileKey ?? null;
-  }, [recentGrids]);
+  }, [prewarmedGrid, recentGrids]);
 
   // Track whether the radar layer is mid-fetch so the loop driver can
   // skip a frame tick when the previous frame's tiles are still in

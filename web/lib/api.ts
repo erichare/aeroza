@@ -143,6 +143,54 @@ export async function fetchMrmsLatest(opts: {
   return (await response.json()) as MrmsLatestResponse;
 }
 
+/**
+ * The newest grid whose *full tile pyramid* the prewarm worker has
+ * published to R2, read from the static origin's ``latest.json`` pointer.
+ *
+ * Why this exists: ``/v1/mrms/latest`` (and the ``/v1/mrms/grids`` catalog)
+ * return a grid the instant it materialises, but its tiles take a render
+ * cycle to land in R2. Pinning the live radar to that grid 404s every tile
+ * until prewarm catches up. This pointer only advances once the tiles are
+ * actually uploaded, so a map pinned to it is a 100% CDN hit — no flicker.
+ *
+ * Returns ``null`` when the static origin isn't configured (local dev → the
+ * on-demand API tile route already handles freshness) or the pointer is
+ * missing/unreadable (cold bucket, pre-deploy). Callers fall back to the
+ * newest catalog grid in that case — same behaviour as before this existed.
+ */
+export interface LatestPrewarmedGrid {
+  fileKey: string;
+  validAt: string;
+  product: string;
+  level: string;
+}
+
+export async function fetchLatestPrewarmedGrid(): Promise<LatestPrewarmedGrid | null> {
+  if (TILES_BASE === null) return null;
+  try {
+    const response = await fetch(`${TILES_BASE}/latest.json`, {
+      headers: { Accept: "application/json" },
+      // The object carries a short max-age; skip the browser's HTTP cache so
+      // polling always revalidates against the (edge-cached) origin.
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as Partial<LatestPrewarmedGrid>;
+    if (typeof data?.fileKey !== "string" || data.fileKey.length === 0) {
+      return null;
+    }
+    return {
+      fileKey: data.fileKey,
+      validAt: typeof data.validAt === "string" ? data.validAt : "",
+      product: typeof data.product === "string" ? data.product : "",
+      level: typeof data.level === "string" ? data.level : "",
+    };
+  } catch {
+    // Network error / bad JSON → fall back to the catalog path.
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Re-exported wire types — components import these as before.
 // ---------------------------------------------------------------------------
