@@ -171,13 +171,11 @@ class PushDispatchPublisher:
             await self._sender.aclose()
 
 
-def build_push_publisher(
-    inner: AlertPublisher, *, db: Database, settings: Settings
-) -> AlertPublisher:
-    """Wrap ``inner`` with push dispatch when APNs is configured, else return it."""
+def build_apns_sender(settings: Settings) -> ApnsClient | None:
+    """Build an APNs sender from settings, or ``None`` when APNs isn't configured."""
     if not settings.apns_configured:
-        return inner
-    sender = ApnsClient(
+        return None
+    return ApnsClient(
         ApnsSettings(
             key_id=settings.apns_key_id,
             team_id=settings.apns_team_id,
@@ -186,6 +184,15 @@ def build_push_publisher(
             use_sandbox=settings.apns_use_sandbox,
         )
     )
+
+
+def build_push_publisher(
+    inner: AlertPublisher, *, db: Database, settings: Settings
+) -> AlertPublisher:
+    """Wrap ``inner`` with push dispatch when APNs is configured, else return it."""
+    sender = build_apns_sender(settings)
+    if sender is None:
+        return inner
     return PushDispatchPublisher(
         inner=inner, db=db, sender=sender, base_url=settings.public_api_base_url
     )

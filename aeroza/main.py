@@ -185,6 +185,10 @@ def create_app() -> FastAPI:
     app.include_router(alert_rules_router)
     app.include_router(auth_router)
     app.include_router(admin_router)
+
+    from aeroza.admin.push_test import router as admin_push_router
+
+    app.include_router(admin_push_router)
     return app
 
 
