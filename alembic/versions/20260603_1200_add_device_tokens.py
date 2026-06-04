@@ -56,12 +56,14 @@ def upgrade() -> None:
         # warning geometry at dispatch time. Nullable until the app sends one.
         sa.Column("location_lat", sa.Float(), nullable=True),
         sa.Column("location_lng", sa.Float(), nullable=True),
-        # Null for anonymous installs; set for BYO-key users. SET NULL on key
-        # delete so revoking a key doesn't unregister the device.
+        # Soft reference to api_keys.id for BYO-key installs (informational).
+        # Intentionally NOT a foreign key: a hard reference would block
+        # `TRUNCATE api_keys` (relied on across the test suite) and couple
+        # unrelated cleanup. A stale id after a key is deleted is harmless —
+        # nothing joins on it.
         sa.Column(
             "api_key_id",
             sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("api_keys.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column(

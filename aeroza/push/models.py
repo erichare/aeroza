@@ -14,11 +14,10 @@ import uuid
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Text, func
+from sqlalchemy import CheckConstraint, DateTime, Float, Index, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from aeroza.auth.models import API_KEYS_TABLE
 from aeroza.shared.base import Base
 
 DEVICE_TOKENS_TABLE: Final[str] = "device_tokens"
@@ -44,12 +43,11 @@ class DeviceTokenRow(Base):
     environment: Mapped[str] = mapped_column(Text, nullable=False, server_default="production")
     location_lat: Mapped[float | None] = mapped_column(Float)
     location_lng: Mapped[float | None] = mapped_column(Float)
-    # Set only for BYO-key registrations; null for anonymous installs.
-    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(f"{API_KEYS_TABLE}.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    # Soft reference to api_keys.id for BYO-key installs (informational). NOT a
+    # foreign key on purpose (see the migration): a hard reference blocks
+    # `TRUNCATE api_keys`, which the auth test suite relies on. A stale id after
+    # a key is deleted is harmless — nothing joins on it.
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
