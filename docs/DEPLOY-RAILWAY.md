@@ -63,8 +63,15 @@ Vercel hobby and Supabase free tier are $0.
    if you'll deploy to AWS us-east-1).
 2. Set a strong DB password, save it somewhere — you'll need the full
    connection string in step 2.
-3. **Database → Extensions** → enable **postgis**. (PostGIS ships in
-   Supabase out of the box; you just have to flip the toggle.)
+3. **Database → Extensions** → enable **postgis**, keeping the schema
+   at the dashboard default **`extensions`** — do NOT install it into
+   `public`, or the security advisor flags `spatial_ref_sys`
+   (see docs/POSTGIS-SCHEMA-RELOCATION.md). Do this BEFORE the first
+   `alembic upgrade head`: the initial migration's
+   `CREATE EXTENSION IF NOT EXISTS postgis` would otherwise install it
+   into `public`, and the `postgres` role cannot relocate it afterwards.
+   (PostGIS ships in Supabase out of the box; you just have to flip the
+   toggle.)
 4. **Database → Connection string** → URI format → choose **Session
    pooler** (NOT *Direct connection*, NOT *Transaction pooler*). Why:
    - *Direct connection* (`db.PROJECT.supabase.co`) resolves to IPv6
