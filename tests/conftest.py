@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -22,12 +22,23 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aeroza.main import create_app
+from aeroza.query.mrms_grids import reset_latest_grid_cache
 from aeroza.shared.db import Database, create_engine_and_session
 from aeroza.stream.subscriber import InMemoryAlertSubscriber
 from alembic import command
 
 INTEGRATION_DB_ENV: str = "AEROZA_TEST_DATABASE_URL"
 ALEMBIC_INI: Path = Path(__file__).resolve().parent.parent / "alembic.ini"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_latest_grid_cache() -> Iterator[None]:
+    """The latest-grid TTL cache is process-global; without a per-test reset,
+    one test's cached "no grids yet" answer bleeds into the next test's
+    freshly seeded data (404s from ``/v1/mrms/latest`` and tile routes)."""
+    reset_latest_grid_cache()
+    yield
+    reset_latest_grid_cache()
 
 
 def _alembic_config(dsn: str) -> Config:
