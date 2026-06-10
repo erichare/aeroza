@@ -1,15 +1,24 @@
 # Relocating PostGIS out of `public`
 
 **Status:** migration `20260610_1000` shipped; prod (Supabase) step pending a
-support ticket.
+support ticket. Live prod state verified 2026-06-10 via the Supabase MCP:
+PostGIS **3.3.7** in `public`, owned by `supabase_admin`; `postgres` is not
+superuser (`rolsuper = false`); every `anon`/`authenticated` grant on
+`spatial_ref_sys` has grantor `supabase_admin`, so a `REVOKE` as `postgres`
+is a silent no-op — both self-service paths are confirmed dead ends.
 
 ## Problem
 
-The Supabase security advisor flags two findings on project
-`qijajhckwxsclvyzeaez`:
+The Supabase security advisor flags these findings on project
+`qijajhckwxsclvyzeaez`, all caused by postgis living in `public`:
 
-- `rls_disabled_in_public` (0013) on `public.spatial_ref_sys`
-- `extension_in_public` (0014) on `postgis`
+- `rls_disabled_in_public` (0013, ERROR) on `public.spatial_ref_sys`
+- `extension_in_public` (0014, WARN) on `postgis`
+- `anon_security_definer_function_executable` (0028, WARN) ×3 and
+  `authenticated_security_definer_function_executable` (0029, WARN) ×3 on
+  `public.st_estimatedextent(…)` — a postgis SECURITY DEFINER function
+  exposed at `/rest/v1/rpc/st_estimatedextent` because it sits in the
+  exposed schema. Relocation clears all of these at once.
 
 `spatial_ref_sys` is a lookup table owned by the PostGIS extension (created
 as `supabase_admin` on Supabase). The `postgres` role cannot `ALTER TABLE …
@@ -35,11 +44,17 @@ reproduce in their Troubleshooting section:
 BEGIN;
 UPDATE pg_extension SET extrelocatable = true WHERE extname = 'postgis';
 ALTER EXTENSION postgis SET SCHEMA extensions;
-ALTER EXTENSION postgis UPDATE TO "ANY";  -- "<version>next" on PostGIS <= 3.2
-ALTER EXTENSION postgis UPDATE;           -- dummy upgrade rewrites internal refs
+ALTER EXTENSION postgis UPDATE TO "3.3.7next";  -- prod is 3.3.7; use "ANY" on >= 3.5
+ALTER EXTENSION postgis UPDATE;                 -- dummy upgrade rewrites internal refs
 UPDATE pg_extension SET extrelocatable = false WHERE extname = 'postgis';
 COMMIT;
 ```
+
+The version-suffix form (`"<POSTGIS_VERSION>next"`) is what Supabase's own
+troubleshooting section prescribes; our CI/local validation on 3.5.2 used
+`"ANY"`, which only exists on newer PostGIS. Prod's installed version is
+3.3.7 (verified) — if Supabase has upgraded it by ticket time, re-check with
+`SELECT extversion FROM pg_extension WHERE extname = 'postgis'`.
 
 This needs **superuser** (it writes `pg_catalog`). On Supabase, `postgres` is
 not a superuser and the extension is owned by `supabase_admin`, so Supabase's
