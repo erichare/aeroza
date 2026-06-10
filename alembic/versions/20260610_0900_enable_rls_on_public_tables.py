@@ -22,7 +22,9 @@ behavioral no-op for the owning role, so this is safe everywhere.
 
 ``public.spatial_ref_sys`` also trips this lint but is owned by the
 PostGIS extension, and ``postgres`` cannot enable RLS on a table it does
-not own — that one is a documented known limitation, not handled here.
+not own — that one is handled by ``20260610_1000``, which relocates the
+whole extension to the ``extensions`` schema (see
+docs/POSTGIS-SCHEMA-RELOCATION.md for the Supabase runbook).
 """
 
 from __future__ import annotations

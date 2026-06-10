@@ -79,6 +79,13 @@ async def integration_db() -> AsyncIterator[Database]:
     # thread avoids "asyncio.run() cannot be called from a running event loop".
     await asyncio.to_thread(command.upgrade, _alembic_config(dsn), "head")
 
+    # Migration 20260610_1000 moves postgis to the ``extensions`` schema and
+    # changes the database-level search_path. The reachability probe above
+    # already pooled a connection with the *old* search_path, on which
+    # unqualified ST_* calls would no longer resolve — drop the pool so every
+    # test connection is opened fresh, after the migration.
+    await db.engine.dispose()
+
     try:
         yield db
     finally:
