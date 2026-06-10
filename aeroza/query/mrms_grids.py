@@ -249,6 +249,18 @@ async def find_latest_mrms_grid_cached(
         return grid
 
 
+def reset_latest_grid_cache() -> None:
+    """Drop every cached latest-grid entry (and the per-key locks).
+
+    Test-isolation hook: the cache is process-global, so an integration test
+    that queries ``/v1/mrms/latest`` while the table is empty would otherwise
+    poison the next test's freshly seeded grid with a cached miss for a full
+    TTL window.
+    """
+    _latest_grid_cache.clear()
+    _latest_grid_locks.clear()
+
+
 def _row_to_view(row: Any) -> MrmsGridView:
     return MrmsGridView(
         file_key=row["file_key"],
